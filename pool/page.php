@@ -435,7 +435,7 @@ function pgtop($alert_marker, $info, $dotop, $user, $douser)
 		if ($who == false)
 		{
 			$top .= '<table cellpadding=0 cellspacing=0 border=0><tr><td>';
-			$top .= '<a href="https://' . $_SERVER['SERVER_NAME'];
+			$top .= '<a href="http://' . $_SERVER['SERVER_NAME'];
 			$top .= '/index.php?Register=1">Login<br>Register</a>';
 			$top .= '</td></tr></table>';
 		}
@@ -586,7 +586,10 @@ function gopage($info, $data, $pagefun, $page, $menu, $name, $user, $ispage = tr
  if ($ispage == true)
  {
 	$both = array('info' => $info, 'data' => $data);
-	$pg .= $pagefun($both, $user);
+        if ($pagefun != 'doindex')  // TODO: doindex function is not defined.
+          {
+	      $pg .= $pagefun($both, $user);
+          }
  }
  else
 	$pg .= $pagefun;
