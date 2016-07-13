@@ -368,6 +368,7 @@ CREATE TABLE miningpayouts (
     createcode character varying(128) DEFAULT ''::character varying NOT NULL,
     createinet character varying(128) DEFAULT ''::character varying NOT NULL,
     expirydate timestamp with time zone DEFAULT '6666-06-06 06:06:06+00',
+    height bigint DEFAULT 0 NOT NULL,
     PRIMARY KEY (payoutid, userid, expirydate)
 );
 
