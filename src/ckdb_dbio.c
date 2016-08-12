@@ -7521,7 +7521,7 @@ clean:
 }
 
 // To RAM
-bool userstats_add(char *poolinstance, char *elapsed, char *username,
+bool userstats_add(PGconn *conn, bool store, char *poolinstance, char *elapsed, char *username,
 			char *workername, char *hashrate, char *hashrate5m,
 			char *hashrate1hr, char *hashrate24hr, bool idle,
 			bool eos, char *by, char *code, char *inet, tv_t *cd,
@@ -7571,6 +7571,51 @@ bool userstats_add(char *poolinstance, char *elapsed, char *username,
 	copy_tv(&(row->statsdate), &(row->createdate));
 
 	workerstatus_update(NULL, NULL, row);
+
+        if (1)
+	  {
+          PGresult *res;
+  	  bool conned = false;
+   	  char *ins;
+          char *params[10 + SIMPLEDATECOUNT];
+	  int n, par = 0;
+	  ExecStatusType rescode;
+          // params[par++] = str_to_buf(row->poolinstance, NULL, 0);
+          params[par++] = bigint_to_buf(row->userid, NULL, 0);
+          params[par++] = str_to_buf(row->workername, NULL, 0);
+	  params[par++] = bigint_to_buf(row->elapsed, NULL, 0);
+
+          params[par++] = double_to_buf(row->hashrate, NULL, 0);
+          params[par++] = double_to_buf(row->hashrate5m, NULL, 0);
+          params[par++] = double_to_buf(row->hashrate1hr, NULL, 0);
+          params[par++] = double_to_buf(row->hashrate24hr, NULL, 0);
+
+          params[par++] = str_to_buf(row->summarylevel,NULL,0);
+	  params[par++] = int_to_buf(row->summarycount, NULL, 0);
+          params[par++] = tv_to_buf(&(row->statsdate), NULL, 0);
+          SIMPLEDATEPARAMS(params, par, row);
+          PARCHK(par, params);
+
+          ins = "insert into userstats "
+		"(userid,workername,elapsed,hashrate,hashrate5m,hashrate1hr,hashrate24hr,summarylevel,summarycount,statsdate"
+		SIMPLEDATECONTROL ") values (" PQPARAM14 ")";
+          if (!conn) 
+            {
+	      conn = dbconnect();
+	      conned = true;
+	    }
+          res = PQexecParams(conn, ins, par, NULL, (const char **)params, NULL, NULL, 0, CKPQ_WRITE);
+	  rescode = PQresultStatus(res);
+          if (!PGOK(rescode)) 
+            {
+	      // bool show_msg = true;
+	      char *code;
+	      PGLOGERR("Insert", rescode, conn);
+	    }
+          PQclear(res);
+          if (conned) PQfinish(conn);
+          for (n = 0; n < par; n++) free(params[n]);
+	  }
 
 	/* group at: userid,workername */
 	K_WLOCK(userstats_free);

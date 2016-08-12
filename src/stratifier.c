@@ -400,6 +400,7 @@ struct txntable {
 #define ID_BLOCK 7
 #define ID_ADDRAUTH 8
 #define ID_HEARTBEAT 9
+#define ID_USERSTATS 10
 
 static const char *ckdb_ids[] = {
 	"authorise",
@@ -411,7 +412,8 @@ static const char *ckdb_ids[] = {
 	"workerstats",
 	"block",
 	"addrauth",
-	"heartbeat"
+	"heartbeat",
+	"userstats"
 };
 
 static const char *ckdb_seq_names[] = {
@@ -937,6 +939,37 @@ static void send_node_workinfo(sdata_t *sdata, const workbase_t *wb)
 		LOGINFO("Sending workinfo to mining nodes");
 		ssend_bulk_postpone(sdata, bulk_send, messages);
 	}
+}
+
+static void send_userstats(ckpool_t *ckp, tv_t diff, user_instance_t* user)
+{
+	char cdfield[64];
+	json_t *val=0;
+        ts_t ts_now;
+	ts_realtime(&ts_now);
+        LOGWARNING("send_userstats");
+
+	sprintf(cdfield, "%lu,%lu",ts_now.tv_sec, ts_now.tv_nsec);
+
+	JSON_CPACK(val, "{ss,si,ss,sf,sf,sf,sf,sb,sb,ss,ss,ss,ss}",
+			"poolinstance", ckp->name,
+			"elapsed", diff.tv_sec ,
+			"username", user->username,
+		   // optional "workername", ,
+			"hashrate", user->dsps1 * nonces,
+			"hashrate5m", user->dsps5 * nonces,
+			"hashrate1hr", user->dsps60 * nonces,
+			"hashrate24hr",user->dsps1440 * nonces ,
+			"idle", 0 ,
+                        "eos", 0,
+		        "createdate", cdfield,
+			"createby", "code",
+			"createcode", __func__,
+			"createinet", ckp->serverurl[0]);
+
+	ckdbq_add(ckp, ID_USERSTATS, val);
+	// TODO if (!ckp->proxy)
+	//	send_node_workinfo(sdata, wb);
 }
 
 static void send_workinfo(ckpool_t *ckp, sdata_t *sdata, const workbase_t *wb)
@@ -7223,6 +7256,7 @@ static void *statsupdate(void *arg)
 
 			copy_tv(&user->last_update, &now);
 
+                        send_userstats(ckp, diff, user);
 			JSON_CPACK(val, "{ss,ss,ss,ss,ss,si,si,sI,sf}",
 					"hashrate1m", suffix1,
 					"hashrate5m", suffix5,

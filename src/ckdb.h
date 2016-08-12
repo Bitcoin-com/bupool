@@ -3311,7 +3311,7 @@ extern bool poolstats_add(PGconn *conn, bool store, char *poolinstance,
 				bool igndup, K_TREE *trf_root);
 extern bool poolstats_fill(PGconn *conn);
 extern bool userstats_add_db(PGconn *conn, USERSTATS *row);
-extern bool userstats_add(char *poolinstance, char *elapsed, char *username,
+extern bool userstats_add(PGconn *conn, bool store, char *poolinstance, char *elapsed, char *username,
 			  char *workername, char *hashrate, char *hashrate5m,
 			  char *hashrate1hr, char *hashrate24hr, bool idle,
 			  bool eos, char *by, char *code, char *inet, tv_t *cd,

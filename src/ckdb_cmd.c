@@ -1164,7 +1164,7 @@ static char *cmd_userstats(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 	eos = (strcasecmp(transfer_data(i_eos), TRUE_STR) == 0);
 
-	ok = userstats_add(transfer_data(i_poolinstance),
+	ok = userstats_add(conn, true, transfer_data(i_poolinstance),
 			   transfer_data(i_elapsed),
 			   transfer_data(i_username),
 			   transfer_data(i_workername),

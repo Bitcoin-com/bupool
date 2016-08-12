@@ -3133,6 +3133,9 @@ static void setup_seq(K_ITEM *seqall, MSGLINE *msgline)
 	char *err = NULL, *st = NULL;
 	size_t len, off;
 
+
+        if (!msgline->seqcmdnam) return;  // ignore bogus lines
+
 	msgline->n_seqall = atol(transfer_data(seqall));
 	if ((seqstt = find_transfer(msgline->trf_root, SEQSTT)))
 		msgline->n_seqstt = atol(transfer_data(seqstt));
