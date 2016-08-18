@@ -107,6 +107,8 @@
  *	message
  */
 
+static pthread_t dbRefreshThread;
+
 static bool socketer_using_data;
 static bool summariser_using_data;
 static bool marker_using_data;
@@ -1148,6 +1150,43 @@ PGconn *dbconnect()
 	return conn;
 }
 
+
+/* Periodically refresh database tables so changes to it coming from the DB replica master or from other applications are applied.
+ */
+static void *refreshFromDbThread(void *arg)
+  {
+    pthread_detach(pthread_self());
+    LOCK_INIT("dbRefresh");
+    while(!everyone_die)
+      {
+        int i;
+        K_ITEM* u_item=NULL;
+        for (i=0;i<60 && !everyone_die; i++) sleep(1);
+        if (everyone_die) break;
+	PGconn *conn = dbconnect();
+#if 0  // No need to fully delete users_fill modified to skip existing records
+	K_WLOCK(users_free);
+        do {
+	   remove_from_ktree(users_root, u_item);
+           if (u_item) 
+	     {
+             free_users_data(u_item);
+             k_add_head(users_free, u_item);
+	     }
+	} while(u_item);
+	K_WUNLOCK(users_free);
+#endif
+        //printf("reloading user database\n");
+	users_fill(conn);
+        //printf("reload user database complete\n");
+	//workers_fill(conn);
+	//useratts_fill(conn);
+        PQfinish(conn);
+      }
+    printf("reload user database thread complete\n");
+    return 0;
+  }
+
 /* Load tables required to support auths,adduser,chkpass and newid
  * N.B. idcontrol is DB internal so is always ready
  * OptionControl is loaded first in case it is needed by other loads
@@ -2034,6 +2073,7 @@ static void dealloc_storage()
 	LOGWARNING("%s() finished", __func__);
 }
 
+
 static bool setup_data()
 {
 	K_TREE_CTX ctx[1];
@@ -2102,6 +2142,8 @@ static bool setup_data()
 	min = floor(sec / 60.0);
 	sec -= min * 60.0;
 	LOGWARNING("reload complete %.0fm %.3fs", min, sec);
+
+        create_pthread(&dbRefreshThread, refreshFromDbThread, NULL);
 
 	// full lock access since mark processing can occur
 	K_KLONGWLOCK(process_pplns_free);

@@ -892,10 +892,21 @@ bool users_fill(PGconn *conn)
 			break;
 
 		username_trim(row);
-
-		add_to_ktree(users_root, item);
-		add_to_ktree(userid_root, item);
-		k_add_head(users_store, item);
+                K_TREE_CTX ctx[1];
+                K_ITEM* alreadyExists = find_in_ktree(userid_root,item,ctx);
+                if (alreadyExists) 
+		  {
+		    //printf("User %s already exists\n",row->username);
+                    free_users_data(item);  // not going to use it so add it back
+                    k_add_head(users_free, item);
+		  }
+                else
+		  {
+		  LOGWARNING("New user %s loaded from database\n",row->username);
+  		  add_to_ktree(users_root, item);
+		  add_to_ktree(userid_root, item);
+		  k_add_head(users_store, item);
+		  }
 	}
 	if (!ok) {
 		free_users_data(item);
