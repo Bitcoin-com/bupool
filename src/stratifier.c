@@ -19,6 +19,7 @@
 #include <math.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
 
 #include "ckpool.h"
 #include "libckpool.h"
