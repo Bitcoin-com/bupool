@@ -3316,7 +3316,7 @@ extern bool userstats_add(PGconn *conn, bool store, char *poolinstance, char *el
 			  char *hashrate1hr, char *hashrate24hr, bool idle,
 			  bool eos, char *by, char *code, char *inet, tv_t *cd,
 			  K_TREE *trf_root);
-extern bool workerstats_add(char *poolinstance, char *elapsed, char *username,
+extern bool workerstats_add(PGconn *conn, char *poolinstance, char *elapsed, char *username,
 			    char *workername, char *hashrate, char *hashrate5m,
 			    char *hashrate1hr, char *hashrate24hr, bool idle,
 			    char *instances, char *by, char *code, char *inet,

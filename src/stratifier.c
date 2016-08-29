@@ -538,6 +538,15 @@ struct json_entry {
 #define GEN_NORMAL 1
 #define GEN_PRIORITY 2
 
+void strtolower(char * s)
+{
+  while(*s) 
+    {
+      *s = tolower(*s);
+      s++;
+    }
+}
+
 /* For storing a set of messages within another lock, allowing us to dump them
  * to the log outside of lock */
 static void add_msg_entry(char_entry_t **entries, char **buf)
@@ -3532,6 +3541,7 @@ static void userclients(sdata_t *sdata, const char *buf, int *sockd)
 		val = json_errormsg("Zero length user key");
 		goto out;
 	}
+        strtolower(username);
 	user = get_user(sdata, username);
 	client_arr = json_array();
 
@@ -4723,8 +4733,9 @@ static user_instance_t *get_create_user(ckpool_t *ckp, sdata_t *sdata, const cha
 static user_instance_t *get_user(sdata_t *sdata, const char *username)
 {
 	bool dummy = false;
-
-	return get_create_user(sdata->ckp, sdata, username, &dummy);
+	char *luser = strdupa(username);
+        strtolower(luser);
+	return get_create_user(sdata->ckp, sdata, luser, &dummy);
 }
 
 static worker_instance_t *__create_worker(user_instance_t *user, const char *workername)
@@ -4795,6 +4806,7 @@ static user_instance_t *generate_user(ckpool_t *ckp, stratum_instance_t *client,
 	username = strsep(&base_username, "._");
 	if (!username || !strlen(username))
 		username = base_username;
+        strtolower(username);
 	len = strlen(username);
 	if (unlikely(len > 127))
 		username[127] = '\0';
@@ -6223,7 +6235,7 @@ static user_instance_t *generate_remote_user(ckpool_t *ckp, const char *workerna
 	len = strlen(username);
 	if (unlikely(len > 127))
 		username[127] = '\0';
-
+        strtolower(username);
 	user = get_create_user(ckp, sdata, username, &new_user);
 
 	/* Is this a btc address based username? */

@@ -3838,7 +3838,7 @@ bool shares_db(PGconn *conn, K_ITEM *s_item)
 	ins = "insert into shares "
 		"(workinfoid,userid,workername,clientid,enonce1,nonce2,nonce,"
 		"diff,sdiff,errn,error,secondaryuserid,ntime,minsdiff,address,"
-		"agent" HISTORYDATECONTROL ") values (" PQPARAM21 ")";
+                "agent" HISTORYDATECONTROL ") values (" PQPARAM21 ")";
 
 	if (!conn) {
 		conn = dbconnect();
@@ -3848,8 +3848,12 @@ bool shares_db(PGconn *conn, K_ITEM *s_item)
 	res = PQexecParams(conn, ins, par, NULL, (const char **)params, NULL, NULL, 0, CKPQ_WRITE);
 	rescode = PQresultStatus(res);
 	if (!PGOK(rescode)) {
+              char *msg = PQerrorMessage(conn);
+              if (strstr(msg, "duplicate") == NULL)
+		{
 		PGLOGERR("Insert", rescode, conn);
 		goto unparam;
+		}
 	}
 
 	ok = true;
@@ -7609,7 +7613,8 @@ bool userstats_add(PGconn *conn, bool store, char *poolinstance, char *elapsed, 
 
           ins = "insert into userstats "
 		"(userid,workername,elapsed,hashrate,hashrate5m,hashrate1hr,hashrate24hr,summarylevel,summarycount,statsdate"
-		SIMPLEDATECONTROL ") values (" PQPARAM14 ")";
+	        SIMPLEDATECONTROL ") values (" PQPARAM14 ")";
+
           if (!conn) 
             {
 	      conn = dbconnect();
@@ -7621,7 +7626,11 @@ bool userstats_add(PGconn *conn, bool store, char *poolinstance, char *elapsed, 
             {
 	      // bool show_msg = true;
 	      char *code;
-	      PGLOGERR("Insert", rescode, conn);
+              char *msg = PQerrorMessage(conn);
+              if (strstr(msg, "duplicate") == NULL)
+		{
+	        PGLOGERR("Insert", rescode, conn);
+		}
 	    }
           PQclear(res);
           if (conned) PQfinish(conn);
@@ -7684,7 +7693,7 @@ bool userstats_add(PGconn *conn, bool store, char *poolinstance, char *elapsed, 
 }
 
 // To RAM
-bool workerstats_add(char *poolinstance, char *elapsed, char *username,
+bool workerstats_add(PGconn *conn, char *poolinstance, char *elapsed, char *username,
 			char *workername, char *hashrate, char *hashrate5m,
 			char *hashrate1hr, char *hashrate24hr, bool idle,
 			char *instances, char *by, char *code, char *inet,
@@ -7739,6 +7748,55 @@ bool workerstats_add(char *poolinstance, char *elapsed, char *username,
 	copy_tv(&(row->statsdate), &(row->createdate));
 
 	workerstatus_update(NULL, NULL, row);
+
+        if (1)  // Write this record to the database
+	  {
+	    PGresult *res;
+	    bool conned = false;
+	    char *ins;
+	    char *params[10 + SIMPLEDATECOUNT];
+	    int n, par = 0;
+	    ExecStatusType rescode;
+	    // params[par++] = str_to_buf(row->poolinstance, NULL, 0);
+	    params[par++] = bigint_to_buf(row->userid, NULL, 0);
+	    params[par++] = str_to_buf(row->workername, NULL, 0);
+	    params[par++] = bigint_to_buf(row->elapsed, NULL, 0);
+
+	    params[par++] = double_to_buf(row->hashrate, NULL, 0);
+	    params[par++] = double_to_buf(row->hashrate5m, NULL, 0);
+	    params[par++] = double_to_buf(row->hashrate1hr, NULL, 0);
+	    params[par++] = double_to_buf(row->hashrate24hr, NULL, 0);
+
+	    params[par++] = str_to_buf(row->summarylevel,NULL,0);
+	    params[par++] = int_to_buf(row->summarycount, NULL, 0);
+	    params[par++] = tv_to_buf(&(row->statsdate), NULL, 0);
+	    SIMPLEDATEPARAMS(params, par, row);
+	    PARCHK(par, params);
+
+	    ins = "insert into userstats "
+	      "(userid,workername,elapsed,hashrate,hashrate5m,hashrate1hr,hashrate24hr,summarylevel,summarycount,statsdate"
+	      SIMPLEDATECONTROL ") values (" PQPARAM14 ")";
+	    if (!conn) 
+	      {
+		conn = dbconnect();
+		conned = true;
+	      }
+	    res = PQexecParams(conn, ins, par, NULL, (const char **)params, NULL, NULL, 0, CKPQ_WRITE);
+	    rescode = PQresultStatus(res);
+	    if (!PGOK(rescode)) 
+	      {
+		// bool show_msg = true;
+		char *code;
+		char *msg = PQerrorMessage(conn);
+		if (strstr(msg, "duplicate") == NULL)
+		  {
+		    PGLOGERR("Insert", rescode, conn);
+		  }
+	      }
+	    PQclear(res);
+	    if (conned) PQfinish(conn);
+	    for (n = 0; n < par; n++) free(params[n]);
+	  }
 
 	K_WLOCK(userstats_free);
 	us_match = find_in_ktree(userstats_root, us_item, ctx);

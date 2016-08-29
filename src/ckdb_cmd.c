@@ -1245,7 +1245,7 @@ static char *cmd_workerstats(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 	i_instances = optional_name(trf_root, "instances", 1, NULL, reply, siz);
 
-	ok = workerstats_add(transfer_data(i_poolinstance),
+	ok = workerstats_add(conn, transfer_data(i_poolinstance),
 			     transfer_data(i_elapsed),
 			     transfer_data(i_username),
 			     transfer_data(i_workername),
