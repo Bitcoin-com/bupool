@@ -427,7 +427,8 @@ static const char *ckdb_seq_names[] = {
 	"seqworkerstats",
 	"seqblock",
 	"seqaddrauth",
-	"seqheartbeat"
+	"seqheartbeat",
+        "sequserstats"
 };
 
 #define ID_COUNT (sizeof(ckdb_ids)/sizeof(char *))
