@@ -17,7 +17,8 @@ bool check_locks = true;
 const char *thread_noname = "UNSET";
 int next_thread_id = 0;
 __thread int my_thread_id = -1;
-__thread char *my_thread_name = NULL;
+//__thread char *my_thread_name = NULL;
+__thread char my_thread_name[THREAD_NAME_LEN];
 __thread bool my_check_locks = true;
 
 bool auto_check_deadlocks = true;

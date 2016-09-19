@@ -86,6 +86,8 @@ struct pool_stats {
 
 typedef struct pool_stats pool_stats_t;
 
+#define WORKBIN_NUM_MERKLE_BINS 16
+
 struct workbase {
 	/* Hash table data */
 	UT_hash_handle hh;
@@ -113,8 +115,8 @@ struct workbase {
 	char *txn_data;
 	char *txn_hashes;
 	int merkles;
-	char merklehash[16][68];
-	char merklebin[16][32];
+	char merklehash[WORKBIN_NUM_MERKLE_BINS][68];
+	char merklebin[WORKBIN_NUM_MERKLE_BINS][32];
 	json_t *merkle_array;
 
 	/* Template variables, lengths are binary lengths! */
@@ -1244,6 +1246,7 @@ static void wb_merkle_bins(ckpool_t *ckp, sdata_t *sdata, workbase_t *wb, json_t
 	wb->merkles = 0;
 	binlen = wb->txns * 32 + 32;
 	hashbin = alloca(binlen + 32);
+        assert(hashbin != NULL);
 	memset(hashbin, 0, 32);
 	binleft = binlen / 32;
 	if (wb->txns) {
@@ -1304,6 +1307,7 @@ static void wb_merkle_bins(ckpool_t *ckp, sdata_t *sdata, workbase_t *wb, json_t
 		while (42) {
 			if (binleft == 1)
 				break;
+                        assert(wb->merkles < WORKBIN_NUM_MERKLE_BINS);
 			memcpy(&wb->merklebin[wb->merkles][0], hashbin + 32, 32);
 			__bin2hex(&wb->merklehash[wb->merkles][0], &wb->merklebin[wb->merkles][0], 32);
 			json_array_append_new(wb->merkle_array, json_string(&wb->merklehash[wb->merkles][0]));

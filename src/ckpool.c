@@ -882,6 +882,9 @@ json_t *json_rpc_call(connsock_t *cs, const char *rpc_req)
 			   __func__, rpc_method(rpc_req), elapsed);
 		goto out_empty;
 	}
+        float adjustment = ((float)len)/((float)(1024*1024));  // BU give the timeout PER megabyte of sent data
+        if (adjustment < 1.0) adjustment = 1.0;
+        timeout = timeout*adjustment;
 	ret = read_socket_line(cs, &timeout);
 	if (ret < 1) {
 		tv_time(&fin_tv);

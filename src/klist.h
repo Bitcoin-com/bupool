@@ -13,6 +13,8 @@
 
 #include "libckpool.h"
 
+#define THREAD_NAME_LEN 64
+
 #define quithere(status, fmt, ...) \
 	quitfrom(status, __FILE__, __func__, __LINE__, fmt, ##__VA_ARGS__)
 
@@ -88,7 +90,8 @@ extern bool check_locks;
 extern const char *thread_noname;
 extern int next_thread_id;
 extern __thread int my_thread_id;
-extern __thread char *my_thread_name;
+//extern __thread char *my_thread_name;
+extern __thread char my_thread_name[THREAD_NAME_LEN];
 extern __thread bool my_check_locks;
 
 // This decides if alloc_storage will set 'check_deadlocks' after it's setup
@@ -248,7 +251,8 @@ retry:
 		ck_wlock(&lock_check_lock); \
 		my_thread_id = next_thread_id++; \
 		ck_wunlock(&lock_check_lock); \
-		my_thread_name = strdup(_name); \
+		strncpy(my_thread_name,_name,THREAD_NAME_LEN);	\
+                my_thread_name[THREAD_NAME_LEN-1] = 0; \
 	} while (0)
 #define FIRST_LOCK_INIT(_name) do { \
 		if (lock_check_init) { \

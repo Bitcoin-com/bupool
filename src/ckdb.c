@@ -6265,6 +6265,7 @@ static bool reload_from(tv_t *start)
 				reloaded_N_files = true;
 		}
 
+                if (filename) free(filename);
 		filename = rotating_filename(restorefrom, reload_timestamp.tv_sec);
 		ok = logopen(&filename, &fp, &apipe);
 		if (!ok) {
@@ -6285,6 +6286,7 @@ static bool reload_from(tv_t *start)
 					finished = true;
 					break;
 				}
+                                if (filename) free(filename);
 				filename = rotating_filename(restorefrom, reload_timestamp.tv_sec);
 				ok = logopen(&filename, &fp, &apipe);
 				if (ok)
@@ -6478,18 +6480,28 @@ static void *listener(void *arg)
 		   __func__, breakdown_threads);
 	reloader = true;
 	for (i = 0; i < breakdown_threads; i++)
-		create_pthread(&break_pt, breaker, &reloader);
+	  {
+	    create_pthread(&break_pt, breaker, &reloader);
+            pthread_detach(break_pt);
+	  }
 	cmder = false;
 	for (i = 0; i < breakdown_threads; i++)
+	  {
 		create_pthread(&break_pt, breaker, &cmder);
+                pthread_detach(break_pt);
+	  }
 
 	create_pthread(&log_pt, logger, NULL);
+	pthread_detach(log_pt);
 
 	create_pthread(&sock_pt, socketer, arg);
+	pthread_detach(sock_pt);
 
 	create_pthread(&summ_pt, summariser, NULL);
+	pthread_detach(summ_pt);
 
 	create_pthread(&mark_pt, marker, NULL);
+	pthread_detach(mark_pt);
 
 	plistener_using_data = true;
 

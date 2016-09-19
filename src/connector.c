@@ -1204,6 +1204,7 @@ static bool setup_upstream(ckpool_t *ckp, cdata_t *cdata)
 		LOGEMERG("No upstream server set in remote trusted server mode");
 		goto out;
 	}
+        // GAS is prior cs->url,port overwritten?
 	if (!extract_sockaddr(ckp->upstream, &cs->url, &cs->port)) {
 		LOGEMERG("Failed to extract upstream address from %s", ckp->upstream);
 		goto out;

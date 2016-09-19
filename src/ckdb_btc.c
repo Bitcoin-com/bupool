@@ -113,22 +113,27 @@ static char *_btc_io(__maybe_unused const char *cmd, char *json, WHERE_FFL_ARGS)
 	int fd, ret, red;
 	size_t len;
 
-	data = btc_data(json, &len);
-	if (!extract_sockaddr(btc_server, &ip, &port)) {
-		LOGERR("%s() invalid btc server '%s'",
-		        __func__, btc_server);
+	if (!extract_sockaddr(btc_server, &ip, &port)) 
+        {
+		LOGERR("%s() invalid btc server '%s'", __func__, btc_server);
 		return NULL;
 	}
 	fd = connect_socket(ip, port);
-	if (fd < 0) {
-		LOGERR("%s() failed to connect to btc server %s",
-		        __func__, btc_server);
+        dealloc(ip);
+        dealloc(port);
+	if (fd < 0) 
+        {
+		LOGERR("%s() failed to connect to btc server %s", __func__, btc_server);
 		return NULL;
 	}
+        
+	data = btc_data(json, &len);  // Must free data
+
 	ret = write_socket(fd, data, len);
-	if (ret != (int)len) {
-		LOGERR("%s() failed to write to btc server %s",
-		        __func__, btc_server);
+        free(data);
+	if (ret != (int)len) 
+        {
+		LOGERR("%s() failed to write to btc server %s", __func__, btc_server);
 		return NULL;
 	}
 	red = read_socket(fd, &ans, btc_timeout);
@@ -138,7 +143,6 @@ static char *_btc_io(__maybe_unused const char *cmd, char *json, WHERE_FFL_ARGS)
 		LOGERR("%s() btc server response not ok: %s",
 		       __func__, text);
 		free(text);
-		free(ans);
 		res = strdup(EMPTY);
 	} else {
 		ptr = strstr(ans, "\n{");
@@ -146,8 +150,8 @@ static char *_btc_io(__maybe_unused const char *cmd, char *json, WHERE_FFL_ARGS)
 			res = strdup(ptr+1);
 		else
 			res = strdup(EMPTY);
-		free(ans);
 	}
+	free(ans);
 	return res;
 }
 
