@@ -3941,7 +3941,6 @@ bool shares_fill(PGconn *conn)
 	res = PQexec(conn, "Begin", CKPQ_READ);
 	rescode = PQresultStatus(res);
 	PQclear(res);
-        for (n = 0; n < par; n++) free(params[n]);
 	if (!PGOK(rescode)) {
 		PGLOGERR("Begin", rescode, conn);
 		return false;
@@ -3958,6 +3957,7 @@ bool shares_fill(PGconn *conn)
 	res = PQexecParams(conn, sel, par, NULL, (const char **)params, NULL, NULL, 0, CKPQ_READ);
 	rescode = PQresultStatus(res);
 	PQclear(res);
+        for (n = 0; n < par; n++) free(params[n]);
 	if (!PGOK(rescode)) {
 		PGLOGERR("Declare", rescode, conn);
 		goto flail;
