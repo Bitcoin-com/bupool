@@ -1241,19 +1241,24 @@ static void wb_merkle_bins(ckpool_t *ckp, sdata_t *sdata, workbase_t *wb, json_t
 	txntable_t *txns = NULL, *tmp, *tmpa;
 	json_t *arr_val, *val;
 	uchar *hashbin;
-
-	wb->txns = json_array_size(txn_array);
+    if (txn_array)
+  	  wb->txns = json_array_size(txn_array);
+    else
+        wb->txns = 0;
+    
 	wb->merkles = 0;
 	binlen = wb->txns * 32 + 32;
 	hashbin = alloca(binlen + 32);
-        assert(hashbin != NULL);
+    assert(hashbin != NULL);
 	memset(hashbin, 0, 32);
 	binleft = binlen / 32;
-	if (wb->txns) {
+	if (wb->txns)
+    {
 		int len = 1, ofs = 0;
 		const char *txn;
 
-		for (i = 0; i < wb->txns; i++) {
+		for (i = 0; i < wb->txns; i++)
+        {
 			arr_val = json_array_get(txn_array, i);
 			txn = json_string_value(json_object_get(arr_val, "data"));
 			if (!txn) {
@@ -1302,18 +1307,22 @@ static void wb_merkle_bins(ckpool_t *ckp, sdata_t *sdata, workbase_t *wb, json_t
 		}
 	} else
 		wb->txn_hashes = ckzalloc(1);
+    
 	wb->merkle_array = json_array();
-	if (binleft > 1) {
-		while (42) {
+	if (binleft > 1)
+    {
+		while (42)
+        {
 			if (binleft == 1)
 				break;
-                        assert(wb->merkles < WORKBIN_NUM_MERKLE_BINS);
+            assert(wb->merkles < WORKBIN_NUM_MERKLE_BINS);
 			memcpy(&wb->merklebin[wb->merkles][0], hashbin + 32, 32);
 			__bin2hex(&wb->merklehash[wb->merkles][0], &wb->merklebin[wb->merkles][0], 32);
 			json_array_append_new(wb->merkle_array, json_string(&wb->merklehash[wb->merkles][0]));
 			LOGDEBUG("MerkleHash %d %s",wb->merkles, &wb->merklehash[wb->merkles][0]);
 			wb->merkles++;
-			if (binleft % 2) {
+			if (binleft % 2)
+            {
 				memcpy(hashbin + binlen, hashbin + binlen - 32, 32);
 				binlen += 32;
 				binleft++;
@@ -1359,6 +1368,130 @@ static void wb_merkle_bins(ckpool_t *ckp, sdata_t *sdata, workbase_t *wb, json_t
 
 	if (added || purged)
 		LOGINFO("Stratifier added %d transactions and purged %d", added, purged);
+}
+
+uint64_t curBlockHeight=0;
+
+static char* grab_empty_block()
+{
+    FILE* fp;
+    fp = fopen("emptyblock.json","r");
+    if (fp)
+    {
+      char* ret = malloc(8000);
+      int amt = fread(ret,sizeof(char),8000,fp);    
+      fclose(fp);
+      if (amt)
+      {
+        ret[amt]=0;
+        truncate("emptyblock.json",0);        
+        return ret;
+      }
+      free(ret);
+    }
+    return NULL;
+}
+
+bool miningEmptyBlock = false; 
+
+/* This function assumes it will only receive a valid json gbt base template
+ * since checking should have been done earlier, and creates the base template
+ * for generating work templates. */
+static void *do_empty_update(void *arg)
+{
+	//struct update_req *ur = (struct update_req *)arg;
+	//int prio = ur->prio;
+    int retries = 0;
+	ckpool_t *ckp = (ckpool_t*) arg;
+	sdata_t *sdata = ckp->sdata;
+	json_t *val; //*txn_array;
+	bool new_block = false;
+	bool ret = false;
+	workbase_t *wb;
+	time_t now_t;
+	char *buf;
+
+	pthread_detach(pthread_self());
+	rename_proc("emptyupdater");
+    
+retry:
+	//buf = send_recv_generator(ckp, "getbase", prio);
+        buf = grab_empty_block();
+    
+	if (unlikely(!buf)) {
+		LOGNOTICE("Get base in update_base delayed due to higher priority request");
+		goto out;
+	}
+	if (unlikely(retries))
+		LOGWARNING("Generator succeeded in update_base after retrying");
+
+	wb = ckzalloc(sizeof(workbase_t));
+	wb->ckp = ckp;
+        json_error_t error;
+	val = json_loads(buf, 0, &error);
+        if(!json_is_object(val))
+          {
+          LOGWARNING("Bad empty block format, error: on line %d: %s", error.line, error.text);
+          assert(0);
+          }
+	json_intcpy(&wb->height, val, "height");
+	json_uint64cpy(&wb->coinbasevalue, val, "coinbasevalue");
+	//txn_array = json_object_get(val, "transactions");
+	//wb_merkle_bins(ckp, sdata, wb, txn_array);
+	json_uintcpy(&wb->version, val, "version");
+	json_uintcpy(&wb->curtime, val, "curtime");
+	json_strcpy(wb->prevhash, val, "previousblockhash");
+        // hash comes in backwards compared to what ckpool wants
+        char bin[32], swap[32];
+        hex2bin(bin, wb->prevhash, 32);
+        swap_256(swap, bin);
+        __bin2hex(wb->prevhash, swap, 32);
+
+	json_strcpy(wb->nbit, val, "bits");
+	json_strcpy(wb->ntime, val, "mintime");
+	sscanf(wb->ntime, "%x", &wb->ntime32);
+        wb->flags = strdup("");  // TODO; coinbase string
+
+	//json_strcpy(wb->target, val, "target");
+	//json_dblcpy(&wb->diff, val, "diff");
+	//json_strcpy(wb->bbversion, val, "bbversion");
+
+	//json_strdup(&wb->flags, val, "flags");
+        wb_merkle_bins(ckp,sdata,wb,NULL);
+    
+	json_decref(val);
+	generate_coinbase(ckp, wb);
+
+	add_base(ckp, sdata, wb, &new_block);
+	/* Reset the update time to avoid stacked low priority notifies. Bring
+	 * forward the next notify in case of a new block. */
+	now_t = time(NULL);
+	if (new_block)
+		now_t -= ckp->update_interval / 2;
+	sdata->update_time = now_t;
+
+        if (wb->height > curBlockHeight)  // I only want to mine an empty block if I'm mining an lower height
+          {
+	  if (new_block)
+		LOGNOTICE("Block hash changed to empty block %s", sdata->lastswaphash);
+          miningEmptyBlock=true;
+	  stratum_broadcast_update(sdata, wb, new_block);
+	  ret = true;
+	  LOGINFO("Broadcast updated stratum base to empty block");
+          }
+out:
+	cksem_post(&sdata->update_sem);
+
+	/* Send a ping to miners if we fail to get a base to keep them
+	 * connected while bitcoind recovers(?) */
+	if (unlikely(!ret)) {
+		LOGINFO("Broadcast ping due to failed stratum base update");
+		broadcast_ping(sdata);
+	}
+	dealloc(buf);
+out_free:
+	// free(ur);
+	return NULL;
 }
 
 /* This function assumes it will only receive a valid json gbt base template
@@ -1436,8 +1569,12 @@ retry:
 		now_t -= ckp->update_interval / 2;
 	sdata->update_time = now_t;
 
-	if (new_block)
-		LOGNOTICE("Block hash changed to %s", sdata->lastswaphash);
+	if (miningEmptyBlock || new_block)
+          {
+	  LOGNOTICE("Block hash changed to %s", sdata->lastswaphash);
+          miningEmptyBlock = false;
+          }
+        curBlockHeight = wb->height;
 	stratum_broadcast_update(sdata, wb, new_block);
 	ret = true;
 	LOGINFO("Broadcast updated stratum base");
@@ -4034,7 +4171,11 @@ retry:
 				broadcast_ping(sdata);
 			}
 		}
-
+        if (!ckp->proxy)
+        {
+          do_empty_update(ckp);
+        }
+        
 		umsg = get_unix_msg(pi);
 	} while (!umsg);
 
@@ -6998,7 +7139,7 @@ static void send_transactions(ckpool_t *ckp, json_params_t *jp)
 		json_set_string(val, "error", "Invalid params");
 		goto out_send;
 	}
-	sscanf(params, "%lx", &job_id);
+	sscanf(params, "%llx", &job_id);
 	hashes = txnhashes_by_jobid(sdata, job_id);
 	if (hashes) {
 		json_object_set_new_nocheck(val, "result", hashes);
