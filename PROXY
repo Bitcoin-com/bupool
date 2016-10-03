@@ -1,0 +1,39 @@
+CKPOOL PROXY
+
+Ultra low overhead massively scalable multi-process, multi-threaded modular
+bitcoin mining pool, proxy, passthrough, library and database interface in c
+for Linux.
+
+---
+DESIGN:
+
+Architecture:
+- Passthrough node(s) that combine connections to a single socket which can
+be used to scale to millions of clients and allow the main pool to be isolated
+from direct communication with clients.
+- Proxy nodes with a database that act as a single client to the upstream pool
+while storing full client data of their own.
+- Simple proxy without the limitations of hashrate inherent in other proxy
+solutions when talking to ckpool.
+
+Features:
+- Proxy and passthrough modes can set up multiple failover upstream pools.
+- Virtually seamless restarts for upgrades through socket handover from exiting
+instances to new starting instance.
+
+---
+BUILDING:
+
+Building ckpool standalone without ckdb has no dependencies outside of the
+basic build tools on any linux installation.
+
+sudo apt-get install build-essential libpq-dev autoconf automake libtool
+./autogen.sh
+./configure --without-ckdb
+make
+make install
+
+---
+RUNNING:
+
+Run the install-proxy.sh script to setup the proxy with an automatic guide and install it to systemd. This required Debian 8 or Ubuntu 16.04 LTS
