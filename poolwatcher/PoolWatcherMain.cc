@@ -77,6 +77,11 @@ int main(int argc, char **argv) {
     }
   }
 
+  // Set file create permissions to all read/write so ckpool can read and truncate emptyblock.json
+  umask(0);
+  int fd = open(EMPTY_BLOCK_FILE, O_CREAT, 0666);
+  if (fd != -1) close(fd);
+
   // Initialize Google's logging library.
   google::InitGoogleLogging(argv[0]);
   FLAGS_log_dir         = string(optLogDir);

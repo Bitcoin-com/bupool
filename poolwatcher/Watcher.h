@@ -42,6 +42,8 @@
 
 #define BTCCOM_WATCHER_AGENT   "btc.com-watcher/0.1"
 
+#define EMPTY_BLOCK_FILE "/tmp/emptyblock.json"
+#define EMPTY_BLOCK_LOG  "/var/log/emptyblock.log"
 
 class PoolWatchClient;
 class ClientContainer;

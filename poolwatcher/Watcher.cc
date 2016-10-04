@@ -236,7 +236,7 @@ bool ClientContainer::makeEmptyGBT(int32_t blockHeight, uint32_t nBits,
   LOG(INFO) << "sumbit to Kafka, msg len: " << sjob.length();
   LOG(INFO) << "empty gbt: " << gbt;
 
-  FILE* fp = fopen("emptyblock.json","w");
+  FILE* fp = fopen(EMPTY_BLOCK_FILE,"w");
   if (fp)
     {
     fprintf(fp,"%s\n",gbt.c_str());
@@ -245,9 +245,9 @@ bool ClientContainer::makeEmptyGBT(int32_t blockHeight, uint32_t nBits,
     }
   else
     {
-    LOG(ERROR) << "cannot open emptyblock.json file for writing";
+    LOG(ERROR) << "cannot open '" EMPTY_BLOCK_FILE "' file for writing";
     }
-  fp = fopen("emptyblock.log","a");
+  fp = fopen(EMPTY_BLOCK_LOG,"a");
   if (fp)
     {
     fprintf(fp,"%s\n",gbt.c_str());
@@ -256,7 +256,7 @@ bool ClientContainer::makeEmptyGBT(int32_t blockHeight, uint32_t nBits,
     }
   else
     {
-    LOG(ERROR) << "cannot open emptyblock.json file for writing";
+    LOG(ERROR) << "cannot open '" EMPTY_BLOCK_LOG "' file for writing";
     }
 
   return true;

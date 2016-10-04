@@ -31,6 +31,8 @@
 #include "connector.h"
 #include "generator.h"
 
+#define EMPTY_BLOCK_FILE "/tmp/emptyblock.json"
+
 #define MIN1	60
 #define MIN5	300
 #define MIN15	900
@@ -1372,10 +1374,11 @@ static void wb_merkle_bins(ckpool_t *ckp, sdata_t *sdata, workbase_t *wb, json_t
 
 uint64_t curBlockHeight=0;
 
+
 static char* grab_empty_block()
 {
     FILE* fp;
-    fp = fopen("emptyblock.json","r");
+    fp = fopen(EMPTY_BLOCK_FILE,"r");
     if (fp)
     {
       char* ret = malloc(8000);
@@ -1384,7 +1387,7 @@ static char* grab_empty_block()
       if (amt)
       {
         ret[amt]=0;
-        truncate("emptyblock.json",0);        
+        truncate(EMPTY_BLOCK_FILE,0);        
         return ret;
       }
       free(ret);
@@ -7087,7 +7090,7 @@ static void send_transactions(ckpool_t *ckp, json_params_t *jp)
 	stratum_instance_t *client = NULL;
 	sdata_t *sdata = ckp->sdata;
 	json_t *val, *hashes;
-	int64_t job_id = 0;
+	uint64_t job_id = 0;
 	time_t now_t;
 
 	if (unlikely(!msg || !strlen(msg))) {
@@ -7139,7 +7142,9 @@ static void send_transactions(ckpool_t *ckp, json_params_t *jp)
 		json_set_string(val, "error", "Invalid params");
 		goto out_send;
 	}
-	sscanf(params, "%llx", &job_id);
+        long long unsigned int tmp;
+	sscanf(params, "%llx", &tmp);
+        job_id = tmp;
 	hashes = txnhashes_by_jobid(sdata, job_id);
 	if (hashes) {
 		json_object_set_new_nocheck(val, "result", hashes);
