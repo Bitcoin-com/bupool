@@ -6,8 +6,8 @@ User=ckpool
 Group=ckpool
 PIDFile=/tmp/ckpool.pid
 TimeoutStartSec=0
-ExecStart=/usr/local/bin/ckpool -c /etc/ckpool/ckpool.conf -k -p
-ExecReload=/usr/local/bin/ckpool -c /etc/ckpool/ckpool.conf -H -p
+ExecStart=/usr/local/bin/ckpool -c /etc/ckpool/ckpool.conf -k -P
+ExecReload=/usr/local/bin/ckpool -c /etc/ckpool/ckpool.conf -H -P
 
 Restart=always
 
