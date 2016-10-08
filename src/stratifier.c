@@ -1,5 +1,6 @@
 /*
  * Copyright 2014-2016 Con Kolivas
+ * Copyright 2016 G. Andrew Stone
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the Free
@@ -9,6 +10,7 @@
 
 #include "config.h"
 
+#include <sys/inotify.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -30,6 +32,8 @@
 #include "utlist.h"
 #include "connector.h"
 #include "generator.h"
+
+#define EMPTY_BLOCK_FILE "/tmp/emptyblock.json"
 
 #define MIN1	60
 #define MIN5	300
@@ -1375,7 +1379,7 @@ uint64_t curBlockHeight=0;
 static char* grab_empty_block()
 {
     FILE* fp;
-    fp = fopen("emptyblock.json","r");
+    fp = fopen(EMPTY_BLOCK_FILE,"r");
     if (fp)
     {
       char* ret = malloc(8000);
@@ -1384,7 +1388,7 @@ static char* grab_empty_block()
       if (amt)
       {
         ret[amt]=0;
-        truncate("emptyblock.json",0);        
+        truncate(EMPTY_BLOCK_FILE,0);        
         return ret;
       }
       free(ret);
@@ -1397,102 +1401,183 @@ bool miningEmptyBlock = false;
 /* This function assumes it will only receive a valid json gbt base template
  * since checking should have been done earlier, and creates the base template
  * for generating work templates. */
-static void *do_empty_update(void *arg)
+static void do_empty_update(ckpool_t* ckp)
 {
-	//struct update_req *ur = (struct update_req *)arg;
-	//int prio = ur->prio;
-    int retries = 0;
-	ckpool_t *ckp = (ckpool_t*) arg;
-	sdata_t *sdata = ckp->sdata;
-	json_t *val; //*txn_array;
-	bool new_block = false;
-	bool ret = false;
-	workbase_t *wb;
-	time_t now_t;
-	char *buf;
-
-	pthread_detach(pthread_self());
-	rename_proc("emptyupdater");
+  //struct update_req *ur = (struct update_req *)arg;
+  //int prio = ur->prio;
+  int retries = 0;
+  sdata_t *sdata = ckp->sdata;
+  json_t *val; //*txn_array;
+  bool new_block = false;
+  bool ret = false;
+  workbase_t *wb;
+  time_t now_t;
+  char *buf;
     
 retry:
-	//buf = send_recv_generator(ckp, "getbase", prio);
-        buf = grab_empty_block();
+  //buf = send_recv_generator(ckp, "getbase", prio);
+  buf = grab_empty_block();
     
-	if (unlikely(!buf)) {
-		LOGNOTICE("Get base in update_base delayed due to higher priority request");
-		goto out;
-	}
-	if (unlikely(retries))
-		LOGWARNING("Generator succeeded in update_base after retrying");
+  if (unlikely(!buf)) {
+    LOGNOTICE("Get base in update_base delayed due to higher priority request");
+    goto out;
+  }
+  if (unlikely(retries))
+    LOGWARNING("Generator succeeded in update_base after retrying");
 
-	wb = ckzalloc(sizeof(workbase_t));
-	wb->ckp = ckp;
-        json_error_t error;
-	val = json_loads(buf, 0, &error);
-        if(!json_is_object(val))
-          {
-          LOGWARNING("Bad empty block format, error: on line %d: %s", error.line, error.text);
-          assert(0);
-          }
-	json_intcpy(&wb->height, val, "height");
-	json_uint64cpy(&wb->coinbasevalue, val, "coinbasevalue");
-	//txn_array = json_object_get(val, "transactions");
-	//wb_merkle_bins(ckp, sdata, wb, txn_array);
-	json_uintcpy(&wb->version, val, "version");
-	json_uintcpy(&wb->curtime, val, "curtime");
-	json_strcpy(wb->prevhash, val, "previousblockhash");
-        // hash comes in backwards compared to what ckpool wants
-        char bin[32], swap[32];
-        hex2bin(bin, wb->prevhash, 32);
-        swap_256(swap, bin);
-        __bin2hex(wb->prevhash, swap, 32);
+  wb = ckzalloc(sizeof(workbase_t));
+  wb->ckp = ckp;
+  json_error_t error;
+  val = json_loads(buf, 0, &error);
+  if(!json_is_object(val))
+    {
+      LOGWARNING("Bad empty block format, error: on line %d: %s", error.line, error.text);
+      return;
+    }
+  json_intcpy(&wb->height, val, "height");
+  json_uint64cpy(&wb->coinbasevalue, val, "coinbasevalue");
+  //txn_array = json_object_get(val, "transactions");
+  //wb_merkle_bins(ckp, sdata, wb, txn_array);
+  json_uintcpy(&wb->version, val, "version");
+  json_uintcpy(&wb->curtime, val, "curtime");
+  json_strcpy(wb->prevhash, val, "previousblockhash");
+  // hash comes in backwards compared to what ckpool wants
+  char bin[32], swap[32];
+  hex2bin(bin, wb->prevhash, 32);
+  swap_256(swap, bin);
+  __bin2hex(wb->prevhash, swap, 32);
 
-	json_strcpy(wb->nbit, val, "bits");
-	json_strcpy(wb->ntime, val, "mintime");
-	sscanf(wb->ntime, "%x", &wb->ntime32);
-        wb->flags = strdup("");  // TODO; coinbase string
+  json_strcpy(wb->nbit, val, "bits");
+  json_strcpy(wb->ntime, val, "mintime");
+  sscanf(wb->ntime, "%x", &wb->ntime32);
+  wb->flags = strdup("");  // TODO; coinbase string
 
-	//json_strcpy(wb->target, val, "target");
-	//json_dblcpy(&wb->diff, val, "diff");
-	//json_strcpy(wb->bbversion, val, "bbversion");
+  //json_strcpy(wb->target, val, "target");
+  //json_dblcpy(&wb->diff, val, "diff");
+  //json_strcpy(wb->bbversion, val, "bbversion");
 
-	//json_strdup(&wb->flags, val, "flags");
-        wb_merkle_bins(ckp,sdata,wb,NULL);
+  //json_strdup(&wb->flags, val, "flags");
+  wb_merkle_bins(ckp,sdata,wb,NULL);
     
-	json_decref(val);
-	generate_coinbase(ckp, wb);
+  json_decref(val);
+  generate_coinbase(ckp, wb);
 
-	add_base(ckp, sdata, wb, &new_block);
-	/* Reset the update time to avoid stacked low priority notifies. Bring
-	 * forward the next notify in case of a new block. */
-	now_t = time(NULL);
-	if (new_block)
-		now_t -= ckp->update_interval / 2;
-	sdata->update_time = now_t;
+  add_base(ckp, sdata, wb, &new_block);
+  /* Reset the update time to avoid stacked low priority notifies. Bring
+   * forward the next notify in case of a new block. */
+  now_t = time(NULL);
+  if (new_block)
+    now_t -= ckp->update_interval / 2;
+  sdata->update_time = now_t;
 
-        if (wb->height > curBlockHeight)  // I only want to mine an empty block if I'm mining an lower height
-          {
-	  if (new_block)
-		LOGNOTICE("Block hash changed to empty block %s", sdata->lastswaphash);
-          miningEmptyBlock=true;
-	  stratum_broadcast_update(sdata, wb, new_block);
-	  ret = true;
-	  LOGINFO("Broadcast updated stratum base to empty block");
-          }
+  if (wb->height > curBlockHeight)  // I only want to mine an empty block if I'm mining an lower height
+    {
+      if (new_block)
+	LOGNOTICE("Block hash changed to empty block %s", sdata->lastswaphash);
+      miningEmptyBlock=true;
+      stratum_broadcast_update(sdata, wb, new_block);
+      ret = true;
+      LOGINFO("Broadcast updated stratum base to empty block");
+    }
 out:
-	cksem_post(&sdata->update_sem);
+  cksem_post(&sdata->update_sem);
 
-	/* Send a ping to miners if we fail to get a base to keep them
-	 * connected while bitcoind recovers(?) */
-	if (unlikely(!ret)) {
-		LOGINFO("Broadcast ping due to failed stratum base update");
-		broadcast_ping(sdata);
-	}
-	dealloc(buf);
+  /* Send a ping to miners if we fail to get a base to keep them
+   * connected while bitcoind recovers(?) */
+  if (unlikely(!ret)) {
+    LOGINFO("Broadcast ping due to failed stratum base update");
+    broadcast_ping(sdata);
+  }
+  dealloc(buf);
 out_free:
-	// free(ur);
-	return NULL;
+  return;
 }
+
+/* Monitors the empty block file for new empty blocks and starts mining on them if one appears */
+#define EVT_BUF_LEN (sizeof(struct inotify_event)*10)
+static void *emptymonitor(void *arg)
+{
+  ckpool_t *ckp = (ckpool_t *)arg;
+  sdata_t *sdata = ckp->sdata;
+  char evtdata[EVT_BUF_LEN];
+
+  pthread_detach(pthread_self());
+  rename_proc("emptymonitor");
+
+  int inot = inotify_init();
+  int watchDesc = -1;
+  assert(inot >= 0);
+
+  int count=0;
+  do
+    {
+    watchDesc = inotify_add_watch(inot,EMPTY_BLOCK_FILE, IN_MODIFY | IN_DELETE_SELF);
+    if (watchDesc < 0) 
+      {
+      usleep(250000);
+      if ((count&63)==0) LOGWARNING(EMPTY_BLOCK_FILE " does not exist.  Headers-only mining unavailable.");
+      }
+    count++;
+    } while(watchDesc < 0);  // loop until the file exists          
+
+  int done = 0;
+  count = 0;
+  while (!done)
+    {
+
+    int length = read(inot,evtdata,EVT_BUF_LEN);
+    if (length)  /* I don't actually care what the event was... just read the file on any event */
+      {
+      struct inotify_event *event = ( struct inotify_event * ) &evtdata;
+      if (1)  // event->len ) 
+        {
+        if ( event->mask & IN_MODIFY ) 
+          {
+          do_empty_update(ckp);
+          }
+        else if ( event->mask & IN_DELETE_SELF ) 
+          {
+          LOGWARNING(EMPTY_BLOCK_FILE " was deleted");
+          //printf( "File deleted.\n");
+          inotify_rm_watch(inot, watchDesc);  // in case file is deleted we remove the watch and try to add it again
+	  do
+	    {
+            watchDesc = inotify_add_watch(inot,EMPTY_BLOCK_FILE, IN_MODIFY | IN_DELETE_SELF);
+            if (watchDesc < 0) 
+              {
+              usleep(250000);
+              //printf(EMPTY_BLOCK_FILE " does not exist\n");
+              }
+            } while(watchDesc < 0);  // loop until the file exists          
+          }
+        else
+          {
+          usleep(250000);
+          //printf("Unknown event");
+          }
+        }
+      }
+    }
+
+
+
+#if 0
+  int watchDesc = inotify_add_watch(inot,EMPTY_BLOCK_FILE, IN_CREATE | IN_MODIFY);
+
+  while (42)
+    {
+    int length = read(inot,evtdata,EVT_BUF_LEN);
+    if (length)  /* I don't actually care what the event was... just read the file on any event */
+      {
+      do_empty_update(ckp);
+      }
+    }
+#endif
+
+  inotify_rm_watch(inot, watchDesc);
+  close(inot);
+}
+
 
 /* This function assumes it will only receive a valid json gbt base template
  * since checking should have been done earlier, and creates the base template
@@ -4171,11 +4256,12 @@ retry:
 				broadcast_ping(sdata);
 			}
 		}
+#if 0
         if (!ckp->proxy)
         {
           do_empty_update(ckp);
         }
-        
+#endif        
 		umsg = get_unix_msg(pi);
 	} while (!umsg);
 
@@ -7087,7 +7173,7 @@ static void send_transactions(ckpool_t *ckp, json_params_t *jp)
 	stratum_instance_t *client = NULL;
 	sdata_t *sdata = ckp->sdata;
 	json_t *val, *hashes;
-	int64_t job_id = 0;
+	uint64_t job_id = 0;
 	time_t now_t;
 
 	if (unlikely(!msg || !strlen(msg))) {
@@ -7139,7 +7225,9 @@ static void send_transactions(ckpool_t *ckp, json_params_t *jp)
 		json_set_string(val, "error", "Invalid params");
 		goto out_send;
 	}
-	sscanf(params, "%llx", &job_id);
+        long long unsigned int tmp;
+	sscanf(params, "%llx", &tmp);
+        job_id = tmp;
 	hashes = txnhashes_by_jobid(sdata, job_id);
 	if (hashes) {
 		json_object_set_new_nocheck(val, "result", hashes);
@@ -7746,7 +7834,7 @@ static bool script_address(const char *btcaddress)
 void *stratifier(void *arg)
 {
 	proc_instance_t *pi = (proc_instance_t *)arg;
-	pthread_t pth_blockupdate, pth_statsupdate, pth_heartbeat;
+	pthread_t pth_blockupdate, pth_statsupdate, pth_heartbeat, pth_emptymonitor;
 	ckpool_t *ckp = pi->ckp;
 	int64_t randomiser;
 	char *buf = NULL;
@@ -7841,7 +7929,7 @@ void *stratifier(void *arg)
 	mutex_init(&sdata->block_lock);
 
 	LOGWARNING("%s stratifier ready", ckp->name);
-
+        if (!ckp->proxy) create_pthread(&pth_emptymonitor, emptymonitor,ckp);
 	stratum_loop(ckp, pi);
 out:
 	/* We should never get here unless there's a fatal error */
