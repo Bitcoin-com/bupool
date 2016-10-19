@@ -14,22 +14,22 @@
  * This should ONLY be used for web reporting cmds i.e. read only
  * Current PHP allows this for a hard coded user
  */
-static K_ITEM *adminuser(K_TREE *trf_root, char *reply, size_t siz)
+static INTRANSIENT *adminuser(K_TREE *trf_root, char *reply, size_t siz)
 {
-	K_ITEM *i_username, *i_admin;
+	INTRANSIENT *in_username, *in_admin;
 	char reply2[1024] = "";
 
-	i_username = require_name(trf_root, "username", MIN_USERNAME,
-				  (char *)userpatt, reply, siz);
-	if (!i_username)
+	in_username = require_in(trf_root, "username", MIN_USERNAME,
+				 (char *)userpatt, reply, siz);
+	if (!in_username)
 		return NULL;
 
-	i_admin = optional_name(trf_root, "admin", MIN_USERNAME,
+	in_admin = optional_in(trf_root, "admin", MIN_USERNAME,
 				(char *)userpatt, reply2, sizeof(reply2));
-	if (i_admin)
-		return i_admin;
+	if (in_admin)
+		return in_admin;
 
-	return i_username;
+	return in_username;
 }
 
 static char *cmd_adduser(PGconn *conn, char *cmd, char *id, tv_t *now, char *by,
@@ -38,14 +38,15 @@ static char *cmd_adduser(PGconn *conn, char *cmd, char *id, tv_t *now, char *by,
 {
 	char reply[1024] = "";
 	size_t siz = sizeof(reply);
-	K_ITEM *i_username, *i_emailaddress, *i_passwordhash, *u_item = NULL;
+	K_ITEM *i_emailaddress, *i_passwordhash, *u_item = NULL;
+	INTRANSIENT *in_username;
 	int event = EVENT_OK;
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_username = require_name(trf_root, "username", MIN_USERNAME,
-				  (char *)userpatt, reply, siz);
-	if (!i_username)
+	in_username = require_in(trf_root, "username", MIN_USERNAME,
+				(char *)userpatt, reply, siz);
+	if (!in_username)
 		return strdup(reply);
 
 	/* If a username added from the web site looks like an address
@@ -56,7 +57,7 @@ static char *cmd_adduser(PGconn *conn, char *cmd, char *id, tv_t *now, char *by,
 	 *  ... and the person who owns the payout address can't check that
 	 *  in advance, they'll just find out with their first payout not
 	 *  arriving at their payout address */
-	if (!like_address(transfer_data(i_username))) {
+	if (!like_address(in_username->str)) {
 		i_emailaddress = require_name(trf_root, "emailaddress", 7,
 					      (char *)mailpatt, reply, siz);
 		if (!i_emailaddress)
@@ -69,10 +70,11 @@ static char *cmd_adduser(PGconn *conn, char *cmd, char *id, tv_t *now, char *by,
 
 		event = events_add(EVENTID_CREACC, trf_root);
 		if (event == EVENT_OK) {
-			u_item = users_add(conn, transfer_data(i_username),
+			u_item = users_add(conn, in_username,
 						 transfer_data(i_emailaddress),
-						 transfer_data(i_passwordhash), 0,
-						 by, code, inet, now, trf_root);
+						 transfer_data(i_passwordhash),
+						 NULL, 0, by, code, inet, now,
+						 trf_root);
 		}
 	}
 
@@ -80,8 +82,8 @@ static char *cmd_adduser(PGconn *conn, char *cmd, char *id, tv_t *now, char *by,
 		LOGERR("%s() %s.failed.DBE", __func__, id);
 		return reply_event(event, "failed.DBE");
 	}
-	LOGDEBUG("%s.ok.added %s", id, transfer_data(i_username));
-	snprintf(reply, siz, "ok.added %s", transfer_data(i_username));
+	LOGDEBUG("%s.ok.added %s", id, in_username->str);
+	snprintf(reply, siz, "ok.added %s", in_username->str);
 	return strdup(reply);
 }
 
@@ -292,7 +294,7 @@ static char *cmd_2fa(__maybe_unused PGconn *conn, char *cmd, char *id,
 				LOGERR("%s() users databits invalid for "
 					"'%s/%"PRId64,
 					__func__,
-					st = safe_text_nonull(users->username),
+					st = safe_text_nonull(users->in_username),
 					users->databits);
 				FREENULL(st);
 				goto dame;
@@ -406,7 +408,7 @@ static char *cmd_2fa(__maybe_unused PGconn *conn, char *cmd, char *id,
 				LOGERR("%s() invalid key for '%s/%s "
 					"len(%d) != %d",
 					__func__,
-					st = safe_text_nonull(users->username),
+					st = safe_text_nonull(users->in_username),
 					USER_TOTPAUTH_NAME, (int)binlen,
 					TOTPAUTH_KEYSIZE);
 				FREENULL(st);
@@ -470,7 +472,8 @@ static char *cmd_userset(PGconn *conn, char *cmd, char *id,
 			 __maybe_unused tv_t *notcd, K_TREE *trf_root,
 			 __maybe_unused bool reload_data)
 {
-	K_ITEM *i_username, *i_passwordhash, *i_2fa, *i_rows, *i_address;
+	INTRANSIENT *in_username;
+	K_ITEM *i_passwordhash, *i_2fa, *i_rows, *i_address;
 	K_ITEM *i_ratio, *i_payname, *i_email, *u_item, *pa_item, *old_pa_item;
 	K_ITEM *ua_item = NULL;
 	USERATTS *useratts = NULL;
@@ -493,16 +496,16 @@ static char *cmd_userset(PGconn *conn, char *cmd, char *id,
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_username = require_name(trf_root, "username", MIN_USERNAME,
-				  (char *)userpatt, reply, siz);
-	if (!i_username) {
+	in_username = require_in(trf_root, "username", MIN_USERNAME,
+				 (char *)userpatt, reply, siz);
+	if (!in_username) {
 		// For web this message is detailed enough
 		reason = "System error";
 		goto struckout;
 	}
 
 	K_RLOCK(users_free);
-	u_item = find_users(transfer_data(i_username));
+	u_item = find_users(in_username->str);
 	K_RUNLOCK(users_free);
 
 	if (!u_item) {
@@ -549,7 +552,7 @@ static char *cmd_userset(PGconn *conn, char *cmd, char *id,
 				while (pa_item && CURRENT(&(row->expirydate)) &&
 				       row->userid == users->userid) {
 					snprintf(tmp, sizeof(tmp), "addr:%d=%s%c",
-						 rows, row->payaddress, FLDSEP);
+						 rows, row->in_payaddress, FLDSEP);
 					APPEND_REALLOC(answer, off, len, tmp);
 					snprintf(tmp, sizeof(tmp), "ratio:%d=%d%c",
 						 rows, row->payratio, FLDSEP);
@@ -648,6 +651,7 @@ static char *cmd_userset(PGconn *conn, char *cmd, char *id,
 						if (ratio == 0)
 							continue;
 
+						// This name won't be intransient
 						snprintf(tmp, sizeof(tmp), "address:%d", i);
 						i_address = require_name(trf_root, tmp,
 									 ADDR_MIN_LEN,
@@ -664,7 +668,7 @@ static char *cmd_userset(PGconn *conn, char *cmd, char *id,
 						pa_item = STORE_HEAD_NOLOCK(pa_store);
 						while (pa_item) {
 							DATA_PAYMENTADDRESSES(row, pa_item);
-							if (strcmp(row->payaddress, address) == 0) {
+							if (strcmp(row->in_payaddress, address) == 0) {
 								K_WUNLOCK(paymentaddresses_free);
 								reason = "Duplicate address";
 								goto struckout;
@@ -682,7 +686,7 @@ static char *cmd_userset(PGconn *conn, char *cmd, char *id,
 						pa_item = k_unlink_head(paymentaddresses_free);
 						DATA_PAYMENTADDRESSES(row, pa_item);
 						bzero(row, sizeof(*row));
-						STRNCPY(row->payaddress, address);
+						row->in_payaddress = intransient_str("payaddress", address);
 						row->payratio = ratio;
 						STRNCPY(row->payname, payname);
 						k_add_head(pa_store, pa_item);
@@ -704,7 +708,7 @@ static char *cmd_userset(PGconn *conn, char *cmd, char *id,
 					DATA_PAYMENTADDRESSES(row, pa_item);
 					// Only EVER validate addresses once ... for now
 					K_RLOCK(paymentaddresses_free);
-					old_pa_item = find_any_payaddress(row->payaddress);
+					old_pa_item = find_any_payaddress(row->in_payaddress);
 					K_RUNLOCK(paymentaddresses_free);
 					if (old_pa_item) {
 						/* This test effectively means that
@@ -717,7 +721,7 @@ static char *cmd_userset(PGconn *conn, char *cmd, char *id,
 							reason = "Unavailable BTC address";
 							goto struckout;
 						}
-					} else if (!btc_valid_address(row->payaddress)) {
+					} else if (!btc_valid_address(row->in_payaddress)) {
 						event = events_add(EVENTID_INVBTC,
 								   trf_root);
 						reason = "Invalid BTC address";
@@ -767,8 +771,8 @@ struckout:
 	if (reason) {
 		char *user, *st = NULL;
 		snprintf(reply, siz, "ERR.%s", reason);
-		if (i_username)
-			user = st = safe_text(transfer_data(i_username));
+		if (in_username)
+			user = st = safe_text(in_username->str);
 		else
 			user = EMPTY;
 		LOGERR("%s.%s.%s (%s)", cmd, id, reply, user);
@@ -852,7 +856,7 @@ static char *cmd_workerset(PGconn *conn, char *cmd, char *id, tv_t *now,
 					update = true;
 			}
 			if (update) {
-				ua_item = useratts_add(conn, users->username,
+				ua_item = useratts_add(conn, users->in_username,
 							USER_OLD_WORKERS, EMPTY,
 							EMPTY, EMPTY,
 							transfer_data(i_oldworkers),
@@ -942,7 +946,7 @@ static char *cmd_workerset(PGconn *conn, char *cmd, char *id, tv_t *now,
 				K_WUNLOCK(heartbeatqueue_free);
 
 				DATA_HEARTBEATQUEUE(heartbeatqueue, hq_item);
-				STRNCPY(heartbeatqueue->workername, workers->workername);
+				heartbeatqueue->in_workername = workers->in_workername;
 				heartbeatqueue->difficultydefault = workers->difficultydefault;
 				copy_tv(&(heartbeatqueue->createdate), now);
 
@@ -989,20 +993,21 @@ static char *cmd_poolstats_do(PGconn *conn, char *cmd, char *id, char *by,
 
 	// log to logfile
 
-	K_ITEM *i_poolinstance, *i_elapsed, *i_users, *i_workers;
+	K_ITEM *i_elapsed, *i_users, *i_workers;
 	K_ITEM *i_hashrate, *i_hashrate5m, *i_hashrate1hr, *i_hashrate24hr;
+	INTRANSIENT *in_poolinstance;
 	K_ITEM look, *ps;
 	POOLSTATS row, *poolstats;
 	bool ok = false;
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_poolinstance = require_name(trf_root, "poolinstance", 1, NULL, reply, siz);
-	if (!i_poolinstance)
+	in_poolinstance = require_in(trf_root, "poolinstance", 1, NULL, reply, siz);
+	if (!in_poolinstance)
 		return strdup(reply);
 
-	if (poolinstance && strcmp(poolinstance, transfer_data(i_poolinstance))) {
-		POOLINSTANCE_DATA_SET(poolstats, transfer_data(i_poolinstance));
+	if (sys_poolinstance && strcmp(sys_poolinstance, in_poolinstance->str)) {
+		POOLINSTANCE_DATA_SET(poolstats, in_poolinstance->str);
 		return strdup(FAILED_PI);
 	}
 
@@ -1034,7 +1039,7 @@ static char *cmd_poolstats_do(PGconn *conn, char *cmd, char *id, char *by,
 	if (!i_hashrate24hr)
 		return strdup(reply);
 
-	STRNCPY(row.poolinstance, transfer_data(i_poolinstance));
+	row.in_poolinstance = in_poolinstance->str;
 	row.createdate.tv_sec = date_eot.tv_sec;
 	row.createdate.tv_usec = date_eot.tv_usec;
 	INIT_POOLSTATS(&look);
@@ -1048,21 +1053,21 @@ static char *cmd_poolstats_do(PGconn *conn, char *cmd, char *id, char *by,
 		DATA_POOLSTATS(poolstats, ps);
 		// Find last stored matching the poolinstance and less than STATS_PER old
 		while (ps && !poolstats->stored &&
-		       strcmp(row.poolinstance, poolstats->poolinstance) == 0 &&
+		       INTREQ(row.in_poolinstance, poolstats->in_poolinstance) &&
 		       tvdiff(cd, &(poolstats->createdate)) < STATS_PER) {
 				ps = prev_in_ktree(ctx);
 				DATA_POOLSTATS_NULL(poolstats, ps);
 		}
 
 		if (!ps || !poolstats->stored ||
-		    strcmp(row.poolinstance, poolstats->poolinstance) != 0 ||
+		    !INTREQ(row.in_poolinstance, poolstats->in_poolinstance) ||
 		    tvdiff(cd, &(poolstats->createdate)) >= STATS_PER)
 			store = true;
 		else
 			store = false;
 	}
 
-	ok = poolstats_add(conn, store, transfer_data(i_poolinstance),
+	ok = poolstats_add(conn, store, in_poolinstance,
 					transfer_data(i_elapsed),
 					transfer_data(i_users),
 					transfer_data(i_workers),
@@ -1108,19 +1113,21 @@ static char *cmd_userstats(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 	// log to logfile
 
-	K_ITEM *i_poolinstance, *i_elapsed, *i_username, *i_workername;
+	K_ITEM *i_elapsed, *i_username;
 	K_ITEM *i_hashrate, *i_hashrate5m, *i_hashrate1hr, *i_hashrate24hr;
+	INTRANSIENT *in_poolinstance;
 	K_ITEM *i_eos, *i_idle;
+	INTRANSIENT *in_workername;
 	bool ok = false, idle, eos;
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_poolinstance = require_name(trf_root, "poolinstance", 1, NULL, reply, siz);
-	if (!i_poolinstance)
+	in_poolinstance = require_in(trf_root, "poolinstance", 1, NULL, reply, siz);
+	if (!in_poolinstance)
 		return strdup(reply);
 
-	if (poolinstance && strcmp(poolinstance, transfer_data(i_poolinstance))) {
-		POOLINSTANCE_DATA_SET(userstats, transfer_data(i_poolinstance));
+	if (sys_poolinstance && strcmp(sys_poolinstance, in_poolinstance->str)) {
+		POOLINSTANCE_DATA_SET(userstats, in_poolinstance->str);
 		return strdup(FAILED_PI);
 	}
 
@@ -1132,9 +1139,9 @@ static char *cmd_userstats(__maybe_unused PGconn *conn, char *cmd, char *id,
 	if (!i_username)
 		return strdup(reply);
 
-	i_workername = optional_name(trf_root, "workername", 1, NULL, reply, siz);
-	if (!i_workername)
-		i_workername = &userstats_workername;
+	in_workername = optional_in(trf_root, "workername", 1, NULL, reply, siz);
+	if (!in_workername)
+		in_workername = userstats_workername;
 
 	i_hashrate = require_name(trf_root, "hashrate", 1, NULL, reply, siz);
 	if (!i_hashrate)
@@ -1164,10 +1171,10 @@ static char *cmd_userstats(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 	eos = (strcasecmp(transfer_data(i_eos), TRUE_STR) == 0);
 
-	ok = userstats_add(conn, true, transfer_data(i_poolinstance),
+	ok = userstats_add(conn, in_poolinstance,
 			   transfer_data(i_elapsed),
 			   transfer_data(i_username),
-			   transfer_data(i_workername),
+			   in_workername,
 			   transfer_data(i_hashrate),
 			   transfer_data(i_hashrate5m),
 			   transfer_data(i_hashrate1hr),
@@ -1193,19 +1200,21 @@ static char *cmd_workerstats(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 	// log to logfile
 
-	K_ITEM *i_poolinstance, *i_elapsed, *i_username, *i_workername;
+	K_ITEM *i_elapsed, *i_username;
 	K_ITEM *i_hashrate, *i_hashrate5m, *i_hashrate1hr, *i_hashrate24hr;
+	INTRANSIENT *in_poolinstance;
 	K_ITEM *i_idle, *i_instances;
+	INTRANSIENT *in_workername;
 	bool ok = false, idle;
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_poolinstance = require_name(trf_root, "poolinstance", 1, NULL, reply, siz);
-	if (!i_poolinstance)
+	in_poolinstance = require_in(trf_root, "poolinstance", 1, NULL, reply, siz);
+	if (!in_poolinstance)
 		return strdup(reply);
 
-	if (poolinstance && strcmp(poolinstance, transfer_data(i_poolinstance))) {
-		POOLINSTANCE_DATA_SET(workerstats, transfer_data(i_poolinstance));
+	if (sys_poolinstance && strcmp(sys_poolinstance, in_poolinstance->str)) {
+		POOLINSTANCE_DATA_SET(workerstats, in_poolinstance->str);
 		return strdup(FAILED_PI);
 	}
 
@@ -1217,8 +1226,8 @@ static char *cmd_workerstats(__maybe_unused PGconn *conn, char *cmd, char *id,
 	if (!i_username)
 		return strdup(reply);
 
-	i_workername = require_name(trf_root, "workername", 1, NULL, reply, siz);
-	if (!i_workername)
+	in_workername = require_in(trf_root, "workername", 1, NULL, reply, siz);
+	if (!in_workername)
 		return strdup(reply);
 
 	i_hashrate = require_name(trf_root, "hashrate", 1, NULL, reply, siz);
@@ -1245,10 +1254,10 @@ static char *cmd_workerstats(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 	i_instances = optional_name(trf_root, "instances", 1, NULL, reply, siz);
 
-	ok = workerstats_add(conn, transfer_data(i_poolinstance),
+	ok = workerstats_add(conn, in_poolinstance,
 			     transfer_data(i_elapsed),
 			     transfer_data(i_username),
-			     transfer_data(i_workername),
+			     in_workername,
 			     transfer_data(i_hashrate),
 			     transfer_data(i_hashrate5m),
 			     transfer_data(i_hashrate1hr),
@@ -1350,7 +1359,7 @@ redo:
 			snprintf(tmp, sizeof(tmp), "reward:%d=%s%c", rows, reply, FLDSEP);
 			APPEND_REALLOC(buf, off, len, tmp);
 
-			str_to_buf(blocks->workername, reply, sizeof(reply));
+			str_to_buf(blocks->in_workername, reply, sizeof(reply));
 			snprintf(tmp, sizeof(tmp), "workername:%d=%s%c", rows, reply, FLDSEP);
 			APPEND_REALLOC(buf, off, len, tmp);
 
@@ -1589,7 +1598,7 @@ static char *cmd_blockstatus(PGconn *conn, char *cmd, char *id, tv_t *now,
 				ok = blocks_add(conn, height,
 						      blocks->blockhash,
 						      BLOCKS_ORPHAN_STR, info,
-						      EMPTY, EMPTY, EMPTY, EMPTY,
+						      EMPTY, EMPTY, NULL, EMPTY,
 						      EMPTY, EMPTY, EMPTY, EMPTY,
 						      by, code, inet, now, false, id,
 						      trf_root);
@@ -1630,7 +1639,7 @@ static char *cmd_blockstatus(PGconn *conn, char *cmd, char *id, tv_t *now,
 				ok = blocks_add(conn, height,
 						      blocks->blockhash,
 						      BLOCKS_REJECT_STR, info,
-						      EMPTY, EMPTY, EMPTY, EMPTY,
+						      EMPTY, EMPTY, NULL, EMPTY,
 						      EMPTY, EMPTY, EMPTY, EMPTY,
 						      by, code, inet, now, false, id,
 						      trf_root);
@@ -1659,7 +1668,7 @@ static char *cmd_blockstatus(PGconn *conn, char *cmd, char *id, tv_t *now,
 				ok = blocks_add(conn, height,
 						      blocks->blockhash,
 						      BLOCKS_CONFIRM_STR, info,
-						      EMPTY, EMPTY, EMPTY, EMPTY,
+						      EMPTY, EMPTY, NULL, EMPTY,
 						      EMPTY, EMPTY, EMPTY, EMPTY,
 						      by, code, inet, now, false, id,
 						      trf_root);
@@ -1734,7 +1743,8 @@ static char *cmd_payments(__maybe_unused PGconn *conn, char *cmd, char *id,
 			  __maybe_unused K_TREE *trf_root,
 			  __maybe_unused bool reload_data)
 {
-	K_ITEM *i_username, *u_item, *p_item, *p2_item, *po_item;
+	K_ITEM *u_item, *p_item, *p2_item, *po_item;
+	INTRANSIENT *in_username;
 	K_TREE_CTX ctx[1];
 	K_STORE *pay_store;
 	PAYMENTS *payments, *last_payments = NULL;
@@ -1750,12 +1760,12 @@ static char *cmd_payments(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_username = adminuser(trf_root, reply, siz);
-	if (!i_username)
+	in_username = adminuser(trf_root, reply, siz);
+	if (!in_username)
 		return strdup(reply);
 
 	K_RLOCK(users_free);
-	u_item = find_users(transfer_data(i_username));
+	u_item = find_users(in_username->str);
 	K_RUNLOCK(users_free);
 	if (!u_item)
 		return strdup("bad");
@@ -1772,13 +1782,17 @@ static char *cmd_payments(__maybe_unused PGconn *conn, char *cmd, char *id,
 	 *	 if it has multiple items (percent payout user) */
 	while (p_item && payments->userid == users->userid) {
 		if (CURRENT(&(payments->expirydate))) {
-			if (!last_payments || payments->payoutid != last_payments->payoutid) {
+			if (!last_payments ||
+			    payments->payoutid != last_payments->payoutid) {
 				p2_item = k_unlink_head(payments_free);
 				DATA_PAYMENTS_NULL(last_payments, p2_item);
-				memcpy(last_payments, payments, sizeof(*last_payments));
+				memcpy(last_payments, payments,
+					sizeof(*last_payments));
 				k_add_tail(pay_store, p2_item);
 			} else {
-				STRNCPY(last_payments->payaddress, "*Multiple");
+				/* This is OK since it's a local store and
+				 *  we don't use INTREQ() on it */
+				last_payments->in_payaddress = "*Multiple";
 				last_payments->amount += payments->amount;
 			}
 		}
@@ -1806,7 +1820,7 @@ static char *cmd_payments(__maybe_unused PGconn *conn, char *cmd, char *id,
 			snprintf(tmp, sizeof(tmp), "height:%d=%s%c", rows, reply, FLDSEP);
 			APPEND_REALLOC(buf, off, len, tmp);
 
-			str_to_buf(payments->payaddress, reply, sizeof(reply));
+			str_to_buf(payments->in_payaddress, reply, sizeof(reply));
 			snprintf(tmp, sizeof(tmp), "payaddress:%d=%s%c", rows, reply, FLDSEP);
 			APPEND_REALLOC(buf, off, len, tmp);
 
@@ -1822,6 +1836,9 @@ static char *cmd_payments(__maybe_unused PGconn *conn, char *cmd, char *id,
 		}
 		p_item = p_item->next;
 	}
+	K_WLOCK(payments_free);
+	k_list_transfer_to_head(pay_store, payments_free);
+	K_WUNLOCK(payments_free);
 
 	snprintf(tmp, sizeof(tmp), "rows=%d%cflds=%s%c",
 		 rows, FLDSEP,
@@ -1831,7 +1848,7 @@ static char *cmd_payments(__maybe_unused PGconn *conn, char *cmd, char *id,
 	snprintf(tmp, sizeof(tmp), "arn=%s%carp=%s", "Payments", FLDSEP, "");
 	APPEND_REALLOC(buf, off, len, tmp);
 
-	LOGDEBUG("%s.ok.%s", id, transfer_data(i_username));
+	LOGDEBUG("%s.ok.%s", id, in_username->str);
 	return buf;
 }
 
@@ -1877,7 +1894,7 @@ static char *cmd_percent(char *cmd, char *id, tv_t *now, USERS *users)
 
 	// Add up all user's worker stats to be divided into payout percentages
 	lookworkers.userid = users->userid;
-	lookworkers.workername[0] = '\0';
+	lookworkers.in_workername = EMPTY;
 	DATE_ZERO(&(lookworkers.expirydate));
 	w_look.data = (void *)(&lookworkers);
 	K_RLOCK(workers_free);
@@ -1888,7 +1905,7 @@ static char *cmd_percent(char *cmd, char *id, tv_t *now, USERS *users)
 		if (CURRENT(&(workers->expirydate))) {
 			K_RLOCK(workerstatus_free);
 			ws_item = find_workerstatus(true, users->userid,
-						    workers->workername);
+						    workers->in_workername);
 			if (ws_item) {
 				DATA_WORKERSTATUS(workerstatus, ws_item);
 				t_diffacc += workerstatus->block_diffacc;
@@ -1911,7 +1928,7 @@ static char *cmd_percent(char *cmd, char *id, tv_t *now, USERS *users)
 			 *  just cmp to last 'unused us_item' userid+worker
 			 *  then step it forward to be the next ready 'unused' */
 			K_RLOCK(userstats_free);
-			us_item = find_userstats(users->userid, workers->workername);
+			us_item = find_userstats(users->userid, workers->in_workername);
 			if (us_item) {
 				DATA_USERSTATS(userstats, us_item);
 				if (tvdiff(now, &(userstats->statsdate)) < USERSTATS_PER_S) {
@@ -1951,7 +1968,7 @@ static char *cmd_percent(char *cmd, char *id, tv_t *now, USERS *users)
 		ratio = (double)(pa->payratio) / (double)paytotal;
 
 		snprintf(tmp, sizeof(tmp), "payaddress:%d=%s%c",
-					   rows, pa->payaddress, FLDSEP);
+					   rows, pa->in_payaddress, FLDSEP);
 		APPEND_REALLOC(buf, off, len, tmp);
 
 		snprintf(tmp, sizeof(tmp), "payratio:%d=%"PRId32"%c",
@@ -2063,7 +2080,7 @@ static char *cmd_percent(char *cmd, char *id, tv_t *now, USERS *users)
 	snprintf(tmp, sizeof(tmp), "arn=%s%carp=%s", "Percents", FLDSEP, "");
 	APPEND_REALLOC(buf, off, len, tmp);
 
-	LOGDEBUG("%s.ok.%s", id, users->username);
+	LOGDEBUG("%s.ok.%s", id, users->in_username);
 	return buf;
 }
 
@@ -2073,8 +2090,9 @@ static char *cmd_workers(__maybe_unused PGconn *conn, char *cmd, char *id,
 			 __maybe_unused tv_t *notcd, K_TREE *trf_root,
 			 __maybe_unused bool reload_data)
 {
-	K_ITEM *i_username, *i_stats, *i_percent, w_look, *u_item, *w_item;
+	K_ITEM *i_stats, *i_percent, w_look, *u_item, *w_item;
 	K_ITEM *ua_item, *us_item, *ws_item;
+	INTRANSIENT *in_username;
 	K_TREE_CTX w_ctx[1];
 	WORKERS lookworkers, *workers;
 	WORKERSTATUS *workerstatus;
@@ -2100,12 +2118,12 @@ static char *cmd_workers(__maybe_unused PGconn *conn, char *cmd, char *id,
 		return reply_ovent(ovent, reply);
 	}
 
-	i_username = adminuser(trf_root, reply, siz);
-	if (!i_username)
+	in_username = adminuser(trf_root, reply, siz);
+	if (!in_username)
 		return strdup(reply);
 
 	K_RLOCK(users_free);
-	u_item = find_users(transfer_data(i_username));
+	u_item = find_users(in_username->str);
 	K_RUNLOCK(users_free);
 	if (!u_item)
 		return strdup("bad");
@@ -2157,7 +2175,7 @@ static char *cmd_workers(__maybe_unused PGconn *conn, char *cmd, char *id,
 	INIT_WORKERS(&w_look);
 
 	lookworkers.userid = users->userid;
-	lookworkers.workername[0] = '\0';
+	lookworkers.in_workername = EMPTY;
 	DATE_ZERO(&(lookworkers.expirydate));
 	w_look.data = (void *)(&lookworkers);
 	K_RLOCK(workers_free);
@@ -2169,7 +2187,7 @@ static char *cmd_workers(__maybe_unused PGconn *conn, char *cmd, char *id,
 		if (CURRENT(&(workers->expirydate))) {
 			K_RLOCK(workerstatus_free);
 			ws_item = find_workerstatus(true, users->userid,
-						    workers->workername);
+						    workers->in_workername);
 			if (ws_item) {
 				DATA_WORKERSTATUS(workerstatus, ws_item);
 				// good or bad - either means active
@@ -2179,7 +2197,7 @@ static char *cmd_workers(__maybe_unused PGconn *conn, char *cmd, char *id,
 			K_RUNLOCK(workerstatus_free);
 
 			if (tvdiff(now, &last_share) < oldworkers) {
-				str_to_buf(workers->workername, reply, sizeof(reply));
+				str_to_buf(workers->in_workername, reply, sizeof(reply));
 				snprintf(tmp, sizeof(tmp), "workername:%d=%s%c", rows, reply, FLDSEP);
 				APPEND_REALLOC(buf, off, len, tmp);
 
@@ -2257,7 +2275,7 @@ static char *cmd_workers(__maybe_unused PGconn *conn, char *cmd, char *id,
 					 *  just cmp to last 'unused us_item' userid+worker
 					 *  then step it forward to be the next ready 'unused' */
 					K_RLOCK(userstats_free);
-					us_item = find_userstats(users->userid, workers->workername);
+					us_item = find_userstats(users->userid, workers->in_workername);
 					if (us_item) {
 						DATA_USERSTATS(userstats, us_item);
 						if (tvdiff(now, &(userstats->statsdate)) < USERSTATS_PER_S) {
@@ -2389,7 +2407,7 @@ static char *cmd_workers(__maybe_unused PGconn *conn, char *cmd, char *id,
 	snprintf(tmp, sizeof(tmp), "arn=%s%carp=%s", "Workers", FLDSEP, "");
 	APPEND_REALLOC(buf, off, len, tmp);
 
-	LOGDEBUG("%s.ok.%s", id, transfer_data(i_username));
+	LOGDEBUG("%s.ok.%s", id, in_username->str);
 	return buf;
 }
 
@@ -2427,7 +2445,7 @@ static char *cmd_allusers(__maybe_unused PGconn *conn, char *cmd, char *id,
 				userstats_u->userid = userstats->userid;
 				/* Remember the first workername for if we ever
 				 *  get the missing user LOGERR message below */
-				STRNCPY(userstats_u->workername, userstats->workername);
+				userstats_u->in_workername = userstats->in_workername;
 				userstats_u->hashrate5m = userstats->hashrate5m;
 				userstats_u->hashrate1hr = userstats->hashrate1hr;
 				userstats_u->instances = userstats->instances;
@@ -2460,10 +2478,10 @@ static char *cmd_allusers(__maybe_unused PGconn *conn, char *cmd, char *id,
 			LOGERR("%s() userstats, but not users, "
 			       "ignored %"PRId64"/%s",
 			       __func__, userstats_u->userid,
-			       userstats_u->workername);
+			       userstats_u->in_workername);
 		} else {
 			DATA_USERS(users, u_item);
-			str_to_buf(users->username, reply, sizeof(reply));
+			str_to_buf(users->in_username, reply, sizeof(reply));
 			snprintf(tmp, sizeof(tmp), "username:%d=%s%c", rows, reply, FLDSEP);
 			APPEND_REALLOC(buf, off, len, tmp);
 
@@ -2522,18 +2540,22 @@ static char *cmd_sharelog(PGconn *conn, char *cmd, char *id,
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
 	if (strcasecmp(cmd, STR_WORKINFO) == 0) {
-		K_ITEM *i_workinfoid, *i_poolinstance, *i_transactiontree, *i_merklehash;
-		K_ITEM *i_prevhash, *i_coinbase1, *i_coinbase2, *i_version, *i_bits;
-		K_ITEM *i_ntime, *i_reward;
+		K_ITEM *i_workinfoid, *i_transactiontree, *i_merklehash;
+		K_ITEM *i_coinbase1, *i_coinbase2, *i_ntime, *i_reward;
+		INTRANSIENT *in_poolinstance, *in_prevhash, *in_version, *in_bits;
 		bool igndup = false;
 		char *txn_tree;
 
-		i_poolinstance = require_name(trf_root, "poolinstance", 1, NULL, reply, siz);
-		if (!i_poolinstance)
+		// nothing needed by key_update is triggered by the workinfo data
+		if (key_update)
+			goto wiconf;
+
+		in_poolinstance = require_in(trf_root, "poolinstance", 1, NULL, reply, siz);
+		if (!in_poolinstance)
 			return strdup(reply);
 
-		if (poolinstance && strcmp(poolinstance, transfer_data(i_poolinstance))){
-			POOLINSTANCE_DATA_SET(workinfo, transfer_data(i_poolinstance));
+		if (sys_poolinstance && strcmp(sys_poolinstance, in_poolinstance->str)){
+			POOLINSTANCE_DATA_SET(workinfo, in_poolinstance->str);
 			return strdup(FAILED_PI);
 		}
 
@@ -2566,8 +2588,8 @@ static char *cmd_sharelog(PGconn *conn, char *cmd, char *id,
 		if (!i_merklehash)
 			return strdup(reply);
 
-		i_prevhash = require_name(trf_root, "prevhash", 1, NULL, reply, siz);
-		if (!i_prevhash)
+		in_prevhash = require_in(trf_root, "prevhash", 1, NULL, reply, siz);
+		if (!in_prevhash)
 			return strdup(reply);
 
 		i_coinbase1 = require_name(trf_root, "coinbase1", 1, NULL, reply, siz);
@@ -2578,12 +2600,12 @@ static char *cmd_sharelog(PGconn *conn, char *cmd, char *id,
 		if (!i_coinbase2)
 			return strdup(reply);
 
-		i_version = require_name(trf_root, "version", 1, NULL, reply, siz);
-		if (!i_version)
+		in_version = require_in(trf_root, "version", 1, NULL, reply, siz);
+		if (!in_version)
 			return strdup(reply);
 
-		i_bits = require_name(trf_root, "bits", 1, NULL, reply, siz);
-		if (!i_bits)
+		in_bits = require_in(trf_root, "bits", 1, NULL, reply, siz);
+		if (!in_bits)
 			return strdup(reply);
 
 		i_ntime = require_name(trf_root, "ntime", 1, NULL, reply, siz);
@@ -2595,14 +2617,14 @@ static char *cmd_sharelog(PGconn *conn, char *cmd, char *id,
 			return strdup(reply);
 
 		workinfoid = workinfo_add(conn, transfer_data(i_workinfoid),
-						transfer_data(i_poolinstance),
+						in_poolinstance,
 						txn_tree,
 						transfer_data(i_merklehash),
-						transfer_data(i_prevhash),
+						in_prevhash,
 						transfer_data(i_coinbase1),
 						transfer_data(i_coinbase2),
-						transfer_data(i_version),
-						transfer_data(i_bits),
+						in_version,
+						in_bits,
 						transfer_data(i_ntime),
 						transfer_data(i_reward),
 						by, code, inet, cd, igndup, trf_root);
@@ -2621,9 +2643,10 @@ wiconf:
 		snprintf(reply, siz, "ok.%"PRId64, workinfoid);
 		return strdup(reply);
 	} else if (strcasecmp(cmd, STR_SHARES) == 0) {
-		K_ITEM *i_workinfoid, *i_username, *i_workername, *i_clientid, *i_errn;
+		K_ITEM *i_workinfoid, *i_username, *i_clientid, *i_errn;
 		K_ITEM *i_enonce1, *i_nonce2, *i_nonce, *i_diff, *i_sdiff;
 		K_ITEM *i_secondaryuserid, *i_ntime, *i_address, *i_agent;
+		INTRANSIENT *in_workername;
 		char *address, *agent;
 		bool ok;
 
@@ -2637,7 +2660,7 @@ wiconf:
 
 		TXT_TO_BIGINT("workinfoid", transfer_data(i_workinfoid), workinfoid);
 
-		if (reloading && !confirm_sharesummary) {
+		if (reloading && !key_update && !confirm_sharesummary) {
 			/* ISDR (Ignored shares during reload)
 			 * This will discard any shares older than the newest
 			 *  workinfoidend of any workmarker - including ready
@@ -2656,6 +2679,11 @@ wiconf:
 				return NULL;
 		}
 
+		if (key_update) {
+			if (workinfoid < key_wi_stt || workinfoid > key_wi_fin)
+				goto sconf;
+		}
+
 		if (confirm_sharesummary) {
 			if (workinfoid < confirm_first_workinfoid ||
 			    workinfoid > confirm_last_workinfoid)
@@ -2666,8 +2694,8 @@ wiconf:
 		if (!i_username)
 			return strdup(reply);
 
-		i_workername = require_name(trf_root, "workername", 1, NULL, reply, siz);
-		if (!i_workername)
+		in_workername = require_in(trf_root, "workername", 1, NULL, reply, siz);
+		if (!in_workername)
 			return strdup(reply);
 
 		i_clientid = require_name(trf_root, "clientid", 1, NULL, reply, siz);
@@ -2717,7 +2745,7 @@ wiconf:
 
 		ok = shares_add(conn, transfer_data(i_workinfoid),
 				      transfer_data(i_username),
-				      transfer_data(i_workername),
+				      in_workername,
 				      transfer_data(i_clientid),
 				      transfer_data(i_errn),
 				      transfer_data(i_enonce1),
@@ -2749,9 +2777,14 @@ sconf:
 		snprintf(reply, siz, "ok.added %s", transfer_data(i_nonce));
 		return strdup(reply);
 	} else if (strcasecmp(cmd, STR_SHAREERRORS) == 0) {
-		K_ITEM *i_workinfoid, *i_username, *i_workername, *i_clientid, *i_errn;
+		K_ITEM *i_workinfoid, *i_username, *i_clientid, *i_errn;
 		K_ITEM *i_error, *i_secondaryuserid;
+		INTRANSIENT *in_workername;
 		bool ok;
+
+		// not summarised in keysummaries
+		if (key_update)
+			goto wiconf;
 
 		i_username = require_name(trf_root, "username", 1, NULL, reply, siz);
 		if (!i_username)
@@ -2776,8 +2809,8 @@ sconf:
 				goto seconf;
 		}
 
-		i_workername = require_name(trf_root, "workername", 1, NULL, reply, siz);
-		if (!i_workername)
+		in_workername = require_in(trf_root, "workername", 1, NULL, reply, siz);
+		if (!in_workername)
 			return strdup(reply);
 
 		i_clientid = require_name(trf_root, "clientid", 1, NULL, reply, siz);
@@ -2799,7 +2832,7 @@ sconf:
 
 		ok = shareerrors_add(conn, transfer_data(i_workinfoid),
 					   transfer_data(i_username),
-					   transfer_data(i_workername),
+					   in_workername,
 					   transfer_data(i_clientid),
 					   transfer_data(i_errn),
 					   transfer_data(i_error),
@@ -2814,17 +2847,18 @@ seconf:
 		snprintf(reply, siz, "ok.added %s", transfer_data(i_username));
 		return strdup(reply);
 	} else if (strcasecmp(cmd, STR_AGEWORKINFO) == 0) {
-		K_ITEM *i_workinfoid, *i_poolinstance;
+		K_ITEM *i_workinfoid;
+		INTRANSIENT *in_poolinstance;
 		int64_t ss_count, s_count, s_diff;
 		tv_t ss_first, ss_last;
 		bool ok;
 
-		i_poolinstance = require_name(trf_root, "poolinstance", 1, NULL, reply, siz);
-		if (!i_poolinstance)
+		in_poolinstance = require_in(trf_root, "poolinstance", 1, NULL, reply, siz);
+		if (!in_poolinstance)
 			return strdup(reply);
 
-		if (poolinstance && strcmp(poolinstance, transfer_data(i_poolinstance))) {
-			POOLINSTANCE_DATA_SET(ageworkinfo, transfer_data(i_poolinstance));
+		if (sys_poolinstance && strcmp(sys_poolinstance, in_poolinstance->str)) {
+			POOLINSTANCE_DATA_SET(ageworkinfo, in_poolinstance->str);
 			return strdup(FAILED_PI);
 		}
 
@@ -2834,33 +2868,36 @@ seconf:
 
 		TXT_TO_BIGINT("workinfoid", transfer_data(i_workinfoid), workinfoid);
 
-		if (reloading && !confirm_sharesummary) {
+		if (reloading && !key_update && !confirm_sharesummary) {
 			// This excludes any already summarised
 			if (workinfoid <= dbstatus.newest_workmarker_workinfoid)
 				return NULL;
 		}
 
-		if (confirm_sharesummary) {
-			TXT_TO_BIGINT("workinfoid", transfer_data(i_workinfoid), workinfoid);
+		if (key_update) {
+			if (workinfoid < key_wi_stt || workinfoid > key_wi_fin)
+				goto awconf;
+		}
 
+		if (confirm_sharesummary) {
 			if (workinfoid < confirm_first_workinfoid ||
 			    workinfoid > confirm_last_workinfoid)
 				goto awconf;
 		}
 
-		ok = workinfo_age(workinfoid, transfer_data(i_poolinstance),
-				  by, code, inet, cd, &ss_first, &ss_last,
-				  &ss_count, &s_count, &s_diff);
+		ok = workinfo_age(workinfoid, in_poolinstance, cd, &ss_first,
+				  &ss_last, &ss_count, &s_count, &s_diff);
 		if (!ok) {
 			LOGERR("%s(%s) %s.failed.DATA", __func__, cmd, id);
 			return strdup("failed.DATA");
 		} else {
-			/* Don't slow down the reload - do them later */
-			if (!reloading) {
+			/* Don't slow down the reload - do them later,
+			 *  unless it's a long reload since:
+			 *   Any pool restarts in the reload data will cause
+			 *    unaged workinfos and thus would stop marker() */
+			if (!reloading || key_update || reloaded_N_files) {
 				// Aging is a queued item thus the reply is ignored
-				auto_age_older(workinfoid,
-						transfer_data(i_poolinstance),
-						by, code, inet, cd);
+				auto_age_older(workinfoid, in_poolinstance, cd);
 			}
 		}
 		LOGDEBUG("%s.ok.aged %"PRId64, id, workinfoid);
@@ -2881,7 +2918,8 @@ static char *cmd_blocks_do(PGconn *conn, char *cmd, int32_t height, char *id,
 	char reply[1024] = "";
 	size_t siz = sizeof(reply);
 	K_ITEM *i_blockhash, *i_confirmed, *i_workinfoid, *i_username;
-	K_ITEM *i_workername, *i_clientid, *i_enonce1, *i_nonce2, *i_nonce, *i_reward;
+	K_ITEM *i_clientid, *i_enonce1, *i_nonce2, *i_nonce, *i_reward;
+	INTRANSIENT *in_workername;
 	TRANSFER *transfer;
 	char *msg;
 	bool ok;
@@ -2908,8 +2946,8 @@ static char *cmd_blocks_do(PGconn *conn, char *cmd, int32_t height, char *id,
 			if (!i_username)
 				return strdup(reply);
 
-			i_workername = require_name(trf_root, "workername", 1, NULL, reply, siz);
-			if (!i_workername)
+			in_workername = require_in(trf_root, "workername", 1, NULL, reply, siz);
+			if (!in_workername)
 				return strdup(reply);
 
 			i_clientid = require_name(trf_root, "clientid", 1, NULL, reply, siz);
@@ -2939,7 +2977,7 @@ static char *cmd_blocks_do(PGconn *conn, char *cmd, int32_t height, char *id,
 					      EMPTY,
 					      transfer_data(i_workinfoid),
 					      transfer_data(i_username),
-					      transfer_data(i_workername),
+					      in_workername,
 					      transfer_data(i_clientid),
 					      transfer_data(i_enonce1),
 					      transfer_data(i_nonce2),
@@ -2954,7 +2992,7 @@ static char *cmd_blocks_do(PGconn *conn, char *cmd, int32_t height, char *id,
 					      transfer_data(i_blockhash),
 					      transfer_data(i_confirmed),
 					      EMPTY,
-					      EMPTY, EMPTY, EMPTY, EMPTY,
+					      EMPTY, EMPTY, NULL, EMPTY,
 					      EMPTY, EMPTY, EMPTY, EMPTY,
 					      by, code, inet, cd, igndup, id,
 					      trf_root);
@@ -3012,16 +3050,14 @@ static char *cmd_auth_do(PGconn *conn, char *cmd, char *id, char *by,
 				char *code, char *inet, tv_t *cd,
 				K_TREE *trf_root, bool reload_data)
 {
-	K_ITEM tmp_poolinstance_item;
-	TRANSFER tmp_poolinstance;
 	K_TREE_CTX ctx[1];
 	char reply[1024] = "";
 	size_t siz = sizeof(reply);
 	int event = EVENT_OK;
-	K_ITEM *i_poolinstance, *i_username, *i_workername, *i_clientid;
+	K_ITEM *i_clientid;
 	K_ITEM *i_enonce1, *i_useragent, *i_preauth, *u_item, *oc_item, *w_item;
+	INTRANSIENT *in_poolinstance, *in_username, *in_workername;
 	USERS *users = NULL;
-	char *username;
 	WORKERS *workers = NULL;
 	OPTIONCONTROL *optioncontrol;
 	size_t len, off;
@@ -3030,34 +3066,27 @@ static char *cmd_auth_do(PGconn *conn, char *cmd, char *id, char *by,
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_poolinstance = optional_name(trf_root, "poolinstance", 1, NULL,
+	in_poolinstance = optional_in(trf_root, "poolinstance", 1, NULL,
 					reply, siz);
-	if (!i_poolinstance) {
-		if (poolinstance) {
-			STRNCPY(tmp_poolinstance.name, "poolinstance");
-			STRNCPY(tmp_poolinstance.svalue, poolinstance);
-			tmp_poolinstance.mvalue = tmp_poolinstance.svalue;
-			tmp_poolinstance_item.name = Transfer;
-			tmp_poolinstance_item.prev = NULL;
-			tmp_poolinstance_item.next = NULL;
-			tmp_poolinstance_item.data = (void *)(&tmp_poolinstance);
-			i_poolinstance = &tmp_poolinstance_item;
+	if (!in_poolinstance) {
+		if (sys_poolinstance) {
+			in_poolinstance = get_intransient("poolinstance",
+							  (char *)sys_poolinstance);
 		} else
-			i_poolinstance = &auth_poolinstance;
+			in_poolinstance = in_empty;
 	} else {
-		if (poolinstance && strcmp(poolinstance, transfer_data(i_poolinstance))) {
-			POOLINSTANCE_DATA_SET(auth, transfer_data(i_poolinstance));
+		if (sys_poolinstance && strcmp(sys_poolinstance, in_poolinstance->str)) {
+			POOLINSTANCE_DATA_SET(auth, in_poolinstance->str);
 			return strdup(FAILED_PI);
 		}
 	}
 
-	i_username = require_name(trf_root, "username", 1, NULL, reply, siz);
-	if (!i_username)
+	in_username = require_in(trf_root, "username", 1, NULL, reply, siz);
+	if (!in_username)
 		return strdup(reply);
-	username = transfer_data(i_username);
 
-	i_workername = require_name(trf_root, "workername", 1, NULL, reply, siz);
-	if (!i_workername)
+	in_workername = require_in(trf_root, "workername", 1, NULL, reply, siz);
+	if (!in_workername)
 		return strdup(reply);
 
 	i_clientid = require_name(trf_root, "clientid", 1, NULL, reply, siz);
@@ -3079,16 +3108,16 @@ static char *cmd_auth_do(PGconn *conn, char *cmd, char *id, char *by,
 	oc_item = find_optioncontrol(OPTIONCONTROL_AUTOADDUSER, cd, pool.height);
 	if (oc_item) {
 		K_RLOCK(users_free);
-		u_item = find_users(username);
+		u_item = find_users(in_username->str);
 		K_RUNLOCK(users_free);
 		if (!u_item) {
 			if (!reload_data)
 				event = events_add(EVENTID_AUTOACC, trf_root);
 			if (event == EVENT_OK) {
 				DATA_OPTIONCONTROL(optioncontrol, oc_item);
-				u_item = users_add(conn, username, EMPTY,
+				u_item = users_add(conn, in_username, EMPTY,
 						   optioncontrol->optionvalue,
-						   0, by, code, inet, cd,
+						   NULL, 0, by, code, inet, cd,
 						   trf_root);
 			} else
 				ok = false;
@@ -3096,9 +3125,8 @@ static char *cmd_auth_do(PGconn *conn, char *cmd, char *id, char *by,
 	}
 
 	if (ok) {
-		ok = auths_add(conn, transfer_data(i_poolinstance),
-				     username,
-				     transfer_data(i_workername),
+		ok = auths_add(conn, in_poolinstance,
+				     in_username, in_workername,
 				     transfer_data(i_clientid),
 				     transfer_data(i_enonce1),
 				     transfer_data(i_useragent),
@@ -3142,7 +3170,7 @@ static char *cmd_auth_do(PGconn *conn, char *cmd, char *id, char *by,
 				 "%s{\"workername\":\"%s\","
 				 "\"difficultydefault\":%"PRId32"}",
 				 first ? EMPTY : ",",
-				 workers->workername,
+				 workers->in_workername,
 				 workers->difficultydefault);
 			APPEND_REALLOC(buf, off, len, reply);
 			first = false;
@@ -3170,14 +3198,13 @@ static char *cmd_addrauth_do(PGconn *conn, char *cmd, char *id, char *by,
 				char *code, char *inet, tv_t *cd,
 				K_TREE *trf_root, bool reload_data)
 {
-	K_ITEM tmp_poolinstance_item;
-	TRANSFER tmp_poolinstance;
 	K_TREE_CTX ctx[1];
 	char reply[1024] = "";
 	size_t siz = sizeof(reply);
 	int event = EVENT_OK;
-	K_ITEM *i_poolinstance, *i_username, *i_workername, *i_clientid;
+	K_ITEM *i_clientid;
 	K_ITEM *i_enonce1, *i_useragent, *i_preauth, *w_item;
+	INTRANSIENT *in_poolinstance, *in_username, *in_workername;
 	USERS *users = NULL;
 	WORKERS *workers = NULL;
 	size_t len, off;
@@ -3186,33 +3213,27 @@ static char *cmd_addrauth_do(PGconn *conn, char *cmd, char *id, char *by,
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_poolinstance = optional_name(trf_root, "poolinstance", 1, NULL,
+	in_poolinstance = optional_in(trf_root, "poolinstance", 1, NULL,
 					reply, siz);
-	if (!i_poolinstance) {
-		if (poolinstance) {
-			STRNCPY(tmp_poolinstance.name, "poolinstance");
-			STRNCPY(tmp_poolinstance.svalue, poolinstance);
-			tmp_poolinstance.mvalue = tmp_poolinstance.svalue;
-			tmp_poolinstance_item.name = Transfer;
-			tmp_poolinstance_item.prev = NULL;
-			tmp_poolinstance_item.next = NULL;
-			tmp_poolinstance_item.data = (void *)(&tmp_poolinstance);
-			i_poolinstance = &tmp_poolinstance_item;
+	if (!in_poolinstance) {
+		if (sys_poolinstance) {
+			in_poolinstance = get_intransient("poolinstance",
+							  (char *)sys_poolinstance);
 		} else
-			i_poolinstance = &auth_poolinstance;
+			in_poolinstance = in_empty;
 	} else {
-		if (poolinstance && strcmp(poolinstance, transfer_data(i_poolinstance))) {
-			POOLINSTANCE_DATA_SET(addrauth, transfer_data(i_poolinstance));
+		if (sys_poolinstance && strcmp(sys_poolinstance, in_poolinstance->str)) {
+			POOLINSTANCE_DATA_SET(addrauth, in_poolinstance->str);
 			return strdup(FAILED_PI);
 		}
 	}
 
-	i_username = require_name(trf_root, "username", 1, NULL, reply, siz);
-	if (!i_username)
+	in_username = require_in(trf_root, "username", 1, NULL, reply, siz);
+	if (!in_username)
 		return strdup(reply);
 
-	i_workername = require_name(trf_root, "workername", 1, NULL, reply, siz);
-	if (!i_workername)
+	in_workername = require_in(trf_root, "workername", 1, NULL, reply, siz);
+	if (!in_workername)
 		return strdup(reply);
 
 	i_clientid = require_name(trf_root, "clientid", 1, NULL, reply, siz);
@@ -3231,9 +3252,7 @@ static char *cmd_addrauth_do(PGconn *conn, char *cmd, char *id, char *by,
 	if (!i_preauth)
 		return strdup(reply);
 
-	ok = auths_add(conn, transfer_data(i_poolinstance),
-			     transfer_data(i_username),
-			     transfer_data(i_workername),
+	ok = auths_add(conn, in_poolinstance, in_username, in_workername,
 			     transfer_data(i_clientid),
 			     transfer_data(i_enonce1),
 			     transfer_data(i_useragent),
@@ -3276,7 +3295,7 @@ static char *cmd_addrauth_do(PGconn *conn, char *cmd, char *id, char *by,
 				 "%s{\"workername\":\"%s\","
 				 "\"difficultydefault\":%"PRId32"}",
 				 first ? EMPTY : ",",
-				 workers->workername,
+				 workers->in_workername,
 				 workers->difficultydefault);
 			APPEND_REALLOC(buf, off, len, reply);
 			first = false;
@@ -3329,7 +3348,7 @@ static char *cmd_heartbeat(__maybe_unused PGconn *conn, char *cmd, char *id,
 		goto pulse;
 	}
 
-	hq_store = k_new_store(heartbeatqueue_free);
+	hq_store = k_new_store_locked(heartbeatqueue_free);
 	k_list_transfer_to_head(heartbeatqueue_store, hq_store);
 	K_WUNLOCK(heartbeatqueue_free);
 
@@ -3345,7 +3364,7 @@ static char *cmd_heartbeat(__maybe_unused PGconn *conn, char *cmd, char *id,
 			 "\"difficultydefault\":%d,"
 			 "\""CDTRF"\":\"%ld,%ld\"}",
 			 first ? "" : ",",
-			 heartbeatqueue->workername,
+			 heartbeatqueue->in_workername,
 			 heartbeatqueue->difficultydefault,
 			 heartbeatqueue->createdate.tv_sec,
 			 heartbeatqueue->createdate.tv_usec);
@@ -3607,7 +3626,7 @@ static char *cmd_homepage(__maybe_unused PGconn *conn, char *cmd, char *id,
 		 * Use 'before' in case there is (unexpectedly) a userstats
 		 *  with an empty workername */
 		lookuserstats.userid = users->userid+1;
-		STRNCPY(lookuserstats.workername, EMPTY);
+		lookuserstats.in_workername = EMPTY;
 		INIT_USERSTATS(&look);
 		look.data = (void *)(&lookuserstats);
 		K_RLOCK(userstats_free);
@@ -3675,7 +3694,8 @@ static char *cmd_getatts(__maybe_unused PGconn *conn, char *cmd, char *id,
 			 __maybe_unused tv_t *notcd, K_TREE *trf_root,
 			 __maybe_unused bool reload_data)
 {
-	K_ITEM *i_username, *i_attlist, *u_item, *ua_item;
+	K_ITEM *i_attlist, *u_item, *ua_item;
+	INTRANSIENT *in_username;
 	char reply[1024] = "";
 	size_t siz = sizeof(reply);
 	int event = EVENT_OK;
@@ -3690,16 +3710,16 @@ static char *cmd_getatts(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_username = require_name(trf_root, "username", MIN_USERNAME,
-				  (char *)userpatt, reply, siz);
-	if (!i_username) {
+	in_username = require_in(trf_root, "username", MIN_USERNAME,
+				 (char *)userpatt, reply, siz);
+	if (!in_username) {
 		// Shouldn't happen except with a code problem no event required
 		reason = "Missing username";
 		goto nuts;
 	}
 
 	K_RLOCK(users_free);
-	u_item = find_users(transfer_data(i_username));
+	u_item = find_users(in_username->str);
 	K_RUNLOCK(users_free);
 
 	if (!u_item) {
@@ -3852,10 +3872,9 @@ static char *cmd_setatts(PGconn *conn, char *cmd, char *id,
 			 __maybe_unused tv_t *notcd, K_TREE *trf_root,
 			 __maybe_unused bool reload_data)
 {
-	ExecStatusType rescode;
-	PGresult *res;
 	bool conned = false;
-	K_ITEM *i_username, *t_item, *u_item, *ua_item = NULL;
+	K_ITEM *t_item, *u_item, *ua_item = NULL;
+	INTRANSIENT *in_username;
 	K_TREE_CTX ctx[1];
 	char reply[1024] = "";
 	size_t siz = sizeof(reply);
@@ -3870,15 +3889,15 @@ static char *cmd_setatts(PGconn *conn, char *cmd, char *id,
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_username = require_name(trf_root, "username", MIN_USERNAME,
-				  (char *)userpatt, reply, siz);
-	if (!i_username) {
+	in_username = require_in(trf_root, "username", MIN_USERNAME,
+				 (char *)userpatt, reply, siz);
+	if (!in_username) {
 		reason = "Missing user";
 		goto bats;
 	}
 
 	K_RLOCK(users_free);
-	u_item = find_users(transfer_data(i_username));
+	u_item = find_users(in_username->str);
 	K_RUNLOCK(users_free);
 
 	if (!u_item) {
@@ -3900,21 +3919,13 @@ static char *cmd_setatts(PGconn *conn, char *cmd, char *id,
 				*(dot++) = '\0';
 				// If we already had a different one, save it to the DB
 				if (ua_item && strcmp(useratts->attname, attname) != 0) {
-					if (conn == NULL) {
-						conn = dbconnect();
-						conned = true;
-					}
+					conned = CKPQConn(&conn);
 					if (!begun) {
-						// Beginning of a write txn
-						res = PQexec(conn, "Begin", CKPQ_WRITE);
-						rescode = PQresultStatus(res);
-						PQclear(res);
-						if (!PGOK(rescode)) {
-							PGLOGERR("Begin", rescode, conn);
+						begun = CKPQBegin(conn);
+						if (!begun) {
 							reason = "DBERR";
 							goto bats;
 						}
-						begun = true;
 					}
 					if (useratts_item_add(conn, ua_item, now, begun)) {
 						ua_item = NULL;
@@ -3962,21 +3973,13 @@ static char *cmd_setatts(PGconn *conn, char *cmd, char *id,
 			t_item = next_in_ktree(ctx);
 		}
 		if (ua_item) {
-			if (conn == NULL) {
-				conn = dbconnect();
-				conned = true;
-			}
+			conned = CKPQConn(&conn);
 			if (!begun) {
-				// Beginning of a write txn
-				res = PQexec(conn, "Begin", CKPQ_WRITE);
-				rescode = PQresultStatus(res);
-				PQclear(res);
-				if (!PGOK(rescode)) {
-					PGLOGERR("Begin", rescode, conn);
+				begun = CKPQBegin(conn);
+				if (!begun) {
 					reason = "DBERR";
 					goto bats;
 				}
-				begun = true;
 			}
 			if (!useratts_item_add(conn, ua_item, now, begun)) {
 				reason = "DBERR";
@@ -3986,15 +3989,11 @@ static char *cmd_setatts(PGconn *conn, char *cmd, char *id,
 		}
 	}
 rollback:
-	if (!reason)
-		res = PQexec(conn, "Commit", CKPQ_WRITE);
-	else
-		res = PQexec(conn, "Rollback", CKPQ_WRITE);
 
-	PQclear(res);
+	CKPQEnd(conn, (reason == NULL));
+
 bats:
-	if (conned)
-		PQfinish(conn);
+	conned = CKPQDisco(&conn, conned);
 	if (reason) {
 		if (ua_item) {
 			K_WLOCK(useratts_free);
@@ -4022,7 +4021,8 @@ static char *cmd_expatts(__maybe_unused PGconn *conn, char *cmd, char *id,
 			 __maybe_unused tv_t *notcd, K_TREE *trf_root,
 			 __maybe_unused bool reload_data)
 {
-	K_ITEM *i_username, *i_attlist, *u_item, *ua_item;
+	K_ITEM *i_attlist, *u_item, *ua_item;
+	INTRANSIENT *in_username;
 	char reply[1024] = "";
 	size_t siz = sizeof(reply);
 	USERATTS *useratts;
@@ -4033,15 +4033,15 @@ static char *cmd_expatts(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_username = require_name(trf_root, "username", MIN_USERNAME,
-				  (char *)userpatt, reply, siz);
-	if (!i_username) {
+	in_username = require_in(trf_root, "username", MIN_USERNAME,
+				 (char *)userpatt, reply, siz);
+	if (!in_username) {
 		reason = "Missing username";
 		goto rats;
 	}
 
 	K_RLOCK(users_free);
-	u_item = find_users(transfer_data(i_username));
+	u_item = find_users(in_username->str);
 	K_RUNLOCK(users_free);
 
 	if (!u_item) {
@@ -4185,8 +4185,6 @@ static char *cmd_setopts(PGconn *conn, char *cmd, char *id,
 			 __maybe_unused tv_t *notcd, K_TREE *trf_root,
 			 __maybe_unused bool reload_data)
 {
-	ExecStatusType rescode;
-	PGresult *res;
 	bool conned = false;
 	K_ITEM *t_item, *oc_item = NULL, *ok = NULL;
 	K_TREE_CTX ctx[1];
@@ -4220,21 +4218,13 @@ static char *cmd_setopts(PGconn *conn, char *cmd, char *id,
 					reason = "Missing value";
 					goto rollback;
 				}
-				if (conn == NULL) {
-					conn = dbconnect();
-					conned = true;
-				}
+				conned = CKPQConn(&conn);
 				if (!begun) {
-					// Beginning of a write txn
-					res = PQexec(conn, "Begin", CKPQ_WRITE);
-					rescode = PQresultStatus(res);
-					PQclear(res);
-					if (!PGOK(rescode)) {
-						PGLOGERR("Begin", rescode, conn);
+					begun = CKPQBegin(conn);
+					if (!begun) {
 						reason = "DBERR";
 						goto rollback;
 					}
-					begun = true;
 				}
 				ok = optioncontrol_item_add(conn, oc_item, now, begun);
 				oc_item = NULL;
@@ -4277,21 +4267,13 @@ static char *cmd_setopts(PGconn *conn, char *cmd, char *id,
 			reason = "Missing value";
 			goto rollback;
 		}
-		if (conn == NULL) {
-			conn = dbconnect();
-			conned = true;
-		}
+		conned = CKPQConn(&conn);
 		if (!begun) {
-			// Beginning of a write txn
-			res = PQexec(conn, "Begin", CKPQ_WRITE);
-			rescode = PQresultStatus(res);
-			PQclear(res);
-			if (!PGOK(rescode)) {
-				PGLOGERR("Begin", rescode, conn);
+			begun = CKPQBegin(conn);
+			if (!begun) {
 				reason = "DBERR";
 				goto rollback;
 			}
-			begun = true;
 		}
 		ok = optioncontrol_item_add(conn, oc_item, now, begun);
 		oc_item = NULL;
@@ -4303,17 +4285,10 @@ static char *cmd_setopts(PGconn *conn, char *cmd, char *id,
 		}
 	}
 rollback:
-	if (begun) {
-		if (reason)
-			res = PQexec(conn, "Rollback", CKPQ_WRITE);
-		else
-			res = PQexec(conn, "Commit", CKPQ_WRITE);
+	if (begun)
+		CKPQEnd(conn, (reason == NULL));
 
-		PQclear(res);
-	}
-
-	if (conned)
-		PQfinish(conn);
+	conned = CKPQDisco(&conn, conned);
 	if (reason) {
 		snprintf(reply, siz, "ERR.%s", reason);
 		LOGERR("%s.%s.%s", cmd, id, reply);
@@ -4434,7 +4409,7 @@ static char *cmd_pplns(__maybe_unused PGconn *conn, char *cmd, char *id,
 	}
 	LOGDEBUG("%s(): block %"PRId32"/%"PRId64"/%s/%s/%"PRId64,
 		 __func__, blocks->height, blocks->workinfoid,
-		 blocks->workername, blocks->confirmed, blocks->reward);
+		 blocks->in_workername, blocks->confirmed, blocks->reward);
 	switch (blocks->confirmed[0]) {
 		case BLOCKS_NEW:
 			block_extra = "Can't be paid out yet";
@@ -4481,7 +4456,7 @@ static char *cmd_pplns(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 	looksharesummary.workinfoid = block_workinfoid;
 	looksharesummary.userid = MAXID;
-	looksharesummary.workername = EMPTY;
+	looksharesummary.in_workername = EMPTY;
 	INIT_SHARESUMMARY(&ss_look);
 	ss_look.data = (void *)(&looksharesummary);
 	K_WLOCK(miningpayouts_free);
@@ -4573,7 +4548,7 @@ static char *cmd_pplns(__maybe_unused PGconn *conn, char *cmd, char *id,
 				wm_count++;
 				lookmarkersummary.markerid = workmarkers->markerid;
 				lookmarkersummary.userid = MAXID;
-				lookmarkersummary.workername = EMPTY;
+				lookmarkersummary.in_workername = EMPTY;
 				INIT_MARKERSUMMARY(&ms_look);
 				ms_look.data = (void *)(&lookmarkersummary);
 				ms_item = find_before_in_ktree(markersummary_root,
@@ -4649,7 +4624,7 @@ static char *cmd_pplns(__maybe_unused PGconn *conn, char *cmd, char *id,
 	APPEND_REALLOC(buf, off, len, tmp);
 	snprintf(tmp, sizeof(tmp), "marks_status=%s%c", marks_status, FLDSEP);
 	APPEND_REALLOC(buf, off, len, tmp);
-	snprintf(tmp, sizeof(tmp), "workername=%s%c", blocks->workername, FLDSEP);
+	snprintf(tmp, sizeof(tmp), "workername=%s%c", blocks->in_workername, FLDSEP);
 	APPEND_REALLOC(buf, off, len, tmp);
 	snprintf(tmp, sizeof(tmp), "nonce=%s%c", blocks->nonce, FLDSEP);
 	APPEND_REALLOC(buf, off, len, tmp);
@@ -4708,8 +4683,8 @@ static char *cmd_pplns(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 				snprintf(tmp, sizeof(tmp),
 					 "user:%d=%s.%d%cpayaddress:%d=%s%c",
-					 rows, users->username, ++count, FLDSEP,
-					 rows, pa->payaddress, FLDSEP);
+					 rows, users->in_username, ++count,
+					 FLDSEP, rows, pa->in_payaddress, FLDSEP);
 				APPEND_REALLOC(buf, off, len, tmp);
 				snprintf(tmp, sizeof(tmp),
 					 "diffacc_user:%d=%.1f%c",
@@ -4725,7 +4700,7 @@ static char *cmd_pplns(__maybe_unused PGconn *conn, char *cmd, char *id,
 			K_RUNLOCK(paymentaddresses_free);
 			snprintf(tmp, sizeof(tmp),
 				 "user:%d=%s.0%cpayaddress:%d=%s%c",
-				 rows, users->username, FLDSEP,
+				 rows, users->in_username, FLDSEP,
 				 rows, "none", FLDSEP);
 			APPEND_REALLOC(buf, off, len, tmp);
 			snprintf(tmp, sizeof(tmp),
@@ -4872,7 +4847,7 @@ static char *cmd_pplns2(__maybe_unused PGconn *conn, char *cmd, char *id,
 	}
 	LOGDEBUG("%s(): block %"PRId32"/%"PRId64"/%s/%s/%"PRId64,
 		 __func__, blocks->height, blocks->workinfoid,
-		 blocks->workername, blocks->confirmed, blocks->reward);
+		 blocks->in_workername, blocks->confirmed, blocks->reward);
 	switch (blocks->confirmed[0]) {
 		case BLOCKS_NEW:
 			block_extra = "Can't be paid out yet";
@@ -4944,7 +4919,7 @@ static char *cmd_pplns2(__maybe_unused PGconn *conn, char *cmd, char *id,
 	APPEND_REALLOC(buf, off, len, tmp);
 	snprintf(tmp, sizeof(tmp), "marks_status=%s%c", marks_status, FLDSEP);
 	APPEND_REALLOC(buf, off, len, tmp);
-	snprintf(tmp, sizeof(tmp), "workername=%s%c", blocks->workername, FLDSEP);
+	snprintf(tmp, sizeof(tmp), "workername=%s%c", blocks->in_workername, FLDSEP);
 	APPEND_REALLOC(buf, off, len, tmp);
 	snprintf(tmp, sizeof(tmp), "nonce=%s%c", blocks->nonce, FLDSEP);
 	APPEND_REALLOC(buf, off, len, tmp);
@@ -4995,11 +4970,13 @@ static char *cmd_pplns2(__maybe_unused PGconn *conn, char *cmd, char *id,
 						 "payaddress:%d=%s%c"
 						 "amount:%d=%"PRId64"%c"
 						 "diffacc:%d=%.1f%c",
-						 rows, payments->subname, FLDSEP,
-						 rows, ua_item ? HOLD_ADDRESS :
-						  payments->payaddress, FLDSEP,
-						 rows, payments->amount, FLDSEP,
-						 rows, payments->diffacc, FLDSEP);
+						 rows, payments->in_subname,
+						 FLDSEP, rows,
+						 ua_item ? HOLD_ADDRESS :
+						  payments->in_payaddress,
+						 FLDSEP, rows, payments->amount,
+						 FLDSEP, rows,
+						 payments->diffacc, FLDSEP);
 					APPEND_REALLOC(buf, off, len, tmp);
 					rows++;
 					out++;
@@ -5014,7 +4991,7 @@ static char *cmd_pplns2(__maybe_unused PGconn *conn, char *cmd, char *id,
 					 "payaddress:%d=%s%c"
 					 "amount:%d=%"PRId64"%c"
 					 "diffacc:%d=%.1f%c",
-					 rows, users->username, FLDSEP,
+					 rows, users->in_username, FLDSEP,
 					 rows, NONE_ADDRESS, FLDSEP,
 					 rows, miningpayouts->amount, FLDSEP,
 					 rows, miningpayouts->diffacc, FLDSEP);
@@ -5335,7 +5312,8 @@ static char *cmd_mpayouts(__maybe_unused PGconn *conn, char *cmd, char *id,
 			  __maybe_unused K_TREE *trf_root,
 			  __maybe_unused bool reload_data)
 {
-	K_ITEM *i_username, *u_item, *mp_item, *po_item;
+	K_ITEM *u_item, *mp_item, *po_item;
+	INTRANSIENT *in_username;
 	K_TREE_CTX ctx[1];
 	MININGPAYOUTS *mp;
 	PAYOUTS *payouts;
@@ -5349,12 +5327,12 @@ static char *cmd_mpayouts(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_username = adminuser(trf_root, reply, siz);
-	if (!i_username)
+	in_username = adminuser(trf_root, reply, siz);
+	if (!in_username)
 		return strdup(reply);
 
 	K_RLOCK(users_free);
-	u_item = find_users(transfer_data(i_username));
+	u_item = find_users(in_username->str);
 	K_RUNLOCK(users_free);
 	if (!u_item)
 		return strdup("bad");
@@ -5446,7 +5424,7 @@ static char *cmd_mpayouts(__maybe_unused PGconn *conn, char *cmd, char *id,
 	snprintf(tmp, sizeof(tmp), "arn=%s%carp=%s", "MiningPayouts", FLDSEP, "");
 	APPEND_REALLOC(buf, off, len, tmp);
 
-	LOGDEBUG("%s.ok.%s", id, transfer_data(i_username));
+	LOGDEBUG("%s.ok.%s", id, in_username->str);
 	return buf;
 }
 
@@ -5528,7 +5506,8 @@ static char *cmd_shifts(__maybe_unused PGconn *conn, char *cmd, char *id,
 			  __maybe_unused tv_t *notcd, K_TREE *trf_root,
 			  __maybe_unused bool reload_data)
 {
-	K_ITEM *i_username, *i_select;
+	INTRANSIENT *in_username;
+	K_ITEM *i_select;
 	K_ITEM *u_item, *p_item, *m_item, ms_look, *wm_item, *ms_item, *wi_item;
 	K_TREE_CTX wm_ctx[1], ms_ctx[1];
 	WORKMARKERS *wm;
@@ -5552,12 +5531,12 @@ static char *cmd_shifts(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_username = adminuser(trf_root, reply, siz);
-	if (!i_username)
+	in_username = adminuser(trf_root, reply, siz);
+	if (!in_username)
 		return strdup(reply);
 
 	K_RLOCK(users_free);
-	u_item = find_users(transfer_data(i_username));
+	u_item = find_users(in_username->str);
 	K_RUNLOCK(users_free);
 	if (!u_item)
 		return strdup("bad");
@@ -5620,7 +5599,7 @@ static char *cmd_shifts(__maybe_unused PGconn *conn, char *cmd, char *id,
 	snprintf(tmp, sizeof(tmp), " where_all=%d", where_all);
 	APPEND_REALLOC(buf, off, len, tmp);
 	LOGDEBUG("%s() user=%"PRId64"/%s' %s",
-		 __func__, users->userid, users->username, buf+1);
+		 __func__, users->userid, users->in_username, buf+1);
 	FREENULL(buf);
 
 	APPEND_REALLOC_INIT(buf, off, len);
@@ -5659,14 +5638,14 @@ static char *cmd_shifts(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 			markersummary.markerid = wm->markerid;
 			markersummary.userid = users->userid;
-			markersummary.workername = EMPTY;
+			markersummary.in_workername = EMPTY;
 			K_RLOCK(markersummary_free);
 			ms_item = find_after_in_ktree(markersummary_root,
 							&ms_look, ms_ctx);
 			DATA_MARKERSUMMARY_NULL(ms, ms_item);
 			while (ms_item && ms->markerid == wm->markerid &&
 			       ms->userid == users->userid) {
-				work = worker_offset(ms->workername);
+				work = worker_offset(ms->in_workername);
 				for (want = 0; workm[want].worker; want++) {
 					if ((want == where_all) ||
 					    (workm[want].match && strncmp(work, workm[want].worker, workm[want].len) == 0) ||
@@ -5867,7 +5846,7 @@ static char *cmd_shifts(__maybe_unused PGconn *conn, char *cmd, char *id,
 		}
 	}
 
-	LOGDEBUG("%s.ok.%s", id, transfer_data(i_username));
+	LOGDEBUG("%s.ok.%s", id, in_username->str);
 	return(buf);
 }
 
@@ -5878,45 +5857,116 @@ static char *cmd_dsp(__maybe_unused PGconn *conn, __maybe_unused char *cmd,
 		     __maybe_unused K_TREE *trf_root,
 		     __maybe_unused bool reload_data)
 {
-	__maybe_unused K_ITEM *i_file;
-	__maybe_unused char reply[1024] = "";
-	__maybe_unused size_t siz = sizeof(reply);
-
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	// WARNING: This is a gaping security hole - only use in development
+#if 1
 	LOGDEBUG("%s.disabled.dsp", id);
 	return strdup("disabled.dsp");
-/*
+#else
+	// WARNING: This is a gaping security hole - only use in development
+	K_ITEM *i_file, *i_name, *i_type;
+	char reply[1024] = "", *fil, *name, *typ;
+	size_t siz = sizeof(reply);
+	K_STORE *store = NULL;
+	K_TREE *tree = NULL;
+	bool unknown_typ = true, unknown_name = true, msg = false;
+
 	i_file = require_name(trf_root, "file", 1, NULL, reply, siz);
 	if (!i_file)
 		return strdup(reply);
 
-	dsp_ktree(blocks_free, blocks_root, transfer_data(i_file), NULL);
+	i_name = require_name(trf_root, "name", 1, NULL, reply, siz);
+	if (!i_name)
+		return strdup(reply);
 
-	dsp_ktree(transfer_free, trf_root, transfer_data(i_file), NULL);
+	i_type = optional_name(trf_root, "type", 1, NULL, reply, siz);
+	if (*reply)
+		return strdup(reply);
 
-	dsp_ktree(paymentaddresses_free, paymentaddresses_root,
-		  transfer_data(i_file), NULL);
+	fil = transfer_data(i_file);
+	name = transfer_data(i_name);
+	if (i_type)
+		typ = transfer_data(i_type);
+	else
+		typ = "tree";
 
-	dsp_ktree(paymentaddresses_create_free, paymentaddresses_root,
-		  transfer_data(i_file), NULL);
+	if (strcasecmp(typ, "tree") == 0) {
+		unknown_typ = false;
 
-	dsp_ktree(sharesummary_free, sharesummary_root,
-		  transfer_data(i_file), NULL);
+		if (strcasecmp(name, "blocks") == 0)
+			tree = blocks_root;
 
-	dsp_ktree(userstats_free, userstats_root,
-		  transfer_data(i_file), NULL);
+		if (strcasecmp(name, "transfer") == 0)
+			tree = trf_root;
 
-	dsp_ktree(markersummary_free, markersummary_root,
-		  transfer_data(i_file), NULL);
+		if (strcasecmp(name, "paymentaddresses") == 0)
+			tree = paymentaddresses_root;
 
-	dsp_ktree(workmarkers_free, workmarkers_root,
-		  transfer_data(i_file), NULL);
+		if (strcasecmp(name, "paymentaddresses_create") == 0)
+			tree = paymentaddresses_create_root;
 
-	LOGDEBUG("%s.ok.dsp.file='%s'", id, transfer_data(i_file));
-	return strdup("ok.dsp");
-*/
+		if (strcasecmp(name, "sharesummary") == 0)
+			tree = sharesummary_root;
+
+		if (strcasecmp(name, "userstats") == 0)
+			tree = userstats_root;
+
+		if (strcasecmp(name, "markersummary") == 0)
+			tree = markersummary_root;
+
+		if (strcasecmp(name, "workmarkers") == 0)
+			tree = workmarkers_root;
+
+		if (strcasecmp(name, "idcontrol") == 0)
+			tree = idcontrol_root;
+
+		if (tree) {
+			unknown_name = false;
+			if (tree->master->dsp_func)
+				dsp_ktree(tree, fil, NULL);
+			else {
+				snprintf(reply, siz,
+					 "%s %s has no dsp_func",
+					 typ, name);
+				msg = true;
+			}
+		}
+	} else if (strcasecmp(typ, "store") == 0) {
+		unknown_typ = false;
+
+		if (strcasecmp(name, "blocks") == 0)
+			store = blocks_store;
+
+		if (strcasecmp(name, "markersummary") == 0)
+			store = markersummary_store;
+
+		if (strcasecmp(name, "msgline") == 0)
+			store = msgline_store;
+
+		if (store) {
+			unknown_name = false;
+			if (store->master->dsp_func)
+				dsp_kstore(store, fil, NULL);
+			else {
+				snprintf(reply, siz,
+					 "%s %s has no dsp_func",
+					 typ, name);
+				msg = true;
+			}
+		}
+	}
+
+	if (unknown_typ) {
+		snprintf(reply, siz, "unknown typ '%s'", typ);
+	} else if (unknown_name) {
+		snprintf(reply, siz, "unknown name '%s' for '%s'", name, typ);
+	} else {
+		if (!msg)
+			snprintf(reply, siz, "ok.dsp.file='%s'", fil);
+	}
+	LOGDEBUG("%s.%s'", id, reply);
+	return strdup(reply);
+#endif
 }
 
 static char *cmd_stats(__maybe_unused PGconn *conn, char *cmd, char *id,
@@ -5929,7 +5979,7 @@ static char *cmd_stats(__maybe_unused PGconn *conn, char *cmd, char *id,
 	char tmp[1024], *buf;
 	const char *name;
 	size_t len, off;
-	uint64_t ram, ram2, tot = 0;
+	int64_t ram, ram2, tot = 0;
 	K_LIST *klist;
 	K_LISTS *klists;
 	int rows = 0;
@@ -5974,8 +6024,8 @@ static char *cmd_stats(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 		snprintf(tmp, sizeof(tmp),
 			 "name:%d=%s%s%s%cinitial:%d=%d%callocated:%d=%d%c"
-			 "instore:%d=%d%cram:%d=%"PRIu64"%c"
-			 "ram2:%d=%"PRIu64"%ccull:%d=%d%c",
+			 "instore:%d=%d%cram:%d=%"PRId64"%c"
+			 "ram2:%d=%"PRId64"%ccull:%d=%d%ccull_limit:%d=%d%c",
 			 rows, name, istree ? " (tree)" : "",
 			 klist->is_lock_only ? " (lock)" : "", FLDSEP,
 			 rows, klist->allocate, FLDSEP,
@@ -5983,7 +6033,8 @@ static char *cmd_stats(__maybe_unused PGconn *conn, char *cmd, char *id,
 			 rows, klist->total - klist->count, FLDSEP,
 			 rows, ram, FLDSEP,
 			 rows, ram2, FLDSEP,
-			 rows, klist->cull_count, FLDSEP);
+			 rows, klist->cull_count, FLDSEP,
+			 rows, klist->cull_limit, FLDSEP);
 		APPEND_REALLOC(buf, off, len, tmp);
 
 		tot += ram + ram2;
@@ -5993,13 +6044,13 @@ static char *cmd_stats(__maybe_unused PGconn *conn, char *cmd, char *id,
 	}
 	ck_wunlock(&lock_check_lock);
 
-	snprintf(tmp, sizeof(tmp), "totalram=%"PRIu64"%c", tot, FLDSEP);
+	snprintf(tmp, sizeof(tmp), "totalram=%"PRId64"%c", tot, FLDSEP);
 	APPEND_REALLOC(buf, off, len, tmp);
 
 	snprintf(tmp, sizeof(tmp),
 		 "rows=%d%cflds=%s%c",
 		 rows, FLDSEP,
-		 "name,initial,allocated,instore,ram,cull", FLDSEP);
+		 "name,initial,allocated,instore,ram,cull,cull_limit", FLDSEP);
 	APPEND_REALLOC(buf, off, len, tmp);
 
 	snprintf(tmp, sizeof(tmp), "arn=%s%carp=%s", "Stats", FLDSEP, "");
@@ -6067,7 +6118,7 @@ static char *cmd_userstatus(PGconn *conn, char *cmd, char *id, tv_t *now, char *
 	DATA_USERS(users, u_item);
 	snprintf(reply, siz, "ok.updated %"PRId64" %s status %s",
 			     users->userid,
-			     users->username,
+			     users->in_username,
 			     status[0] ? "disabled" : "enabled");
 	LOGWARNING("%s.%s", id, reply);
 	return strdup(reply);
@@ -6214,7 +6265,7 @@ static char *cmd_marks(PGconn *conn, char *cmd, char *id,
 			return strdup(reply);
 		}
 		DATA_WORKINFO(workinfo, w_item);
-		ok = marks_process(conn, true, workinfo->poolinstance,
+		ok = marks_process(conn, true, workinfo->in_poolinstance,
 				   workinfoid, description, extra, marktype,
 				   status, by, code, inet, cd, trf_root);
 	} else if (strcasecmp(action, "expire") == 0) {
@@ -6271,7 +6322,7 @@ static char *cmd_marks(PGconn *conn, char *cmd, char *id,
 			action = "status-unchanged";
 			ok = true;
 		} else {
-			ok = marks_process(conn, true, marks->poolinstance,
+			ok = marks_process(conn, true, marks->in_poolinstance,
 					   workinfoid, marks->description,
 					   marks->extra, marks->marktype,
 					   status, by, code, inet, cd,
@@ -6310,7 +6361,7 @@ static char *cmd_marks(PGconn *conn, char *cmd, char *id,
 			action = "extra-unchanged";
 			ok = true;
 		} else {
-			ok = marks_process(conn, true, marks->poolinstance,
+			ok = marks_process(conn, true, marks->in_poolinstance,
 					   workinfoid, marks->description,
 					   extra, marks->marktype,
 					   status, by, code, inet, cd,
@@ -6409,7 +6460,7 @@ static char *cmd_marks(PGconn *conn, char *cmd, char *id,
 			return strdup(reply);
 		}
 		ok = workmarkers_process(NULL, false, true, markerid,
-					 workmarkers->poolinstance,
+					 workmarkers->in_poolinstance,
 					 workmarkers->workinfoidend,
 					 workmarkers->workinfoidstart,
 					 workmarkers->description,
@@ -6442,7 +6493,7 @@ static char *cmd_marks(PGconn *conn, char *cmd, char *id,
 			return strdup(reply);
 		}
 		ok = workmarkers_process(NULL, false, true, markerid,
-					 workmarkers->poolinstance,
+					 workmarkers->in_poolinstance,
 					 workmarkers->workinfoidend,
 					 workmarkers->workinfoidstart,
 					 workmarkers->description,
@@ -6476,7 +6527,7 @@ static char *cmd_marks(PGconn *conn, char *cmd, char *id,
 		 *  Of course if you don't have ALL the necessary shares in
 		 *   the CCLs then you'd lose data doing this
 		 *
-		 * SS_to_MS will complain if any markersummaries already exist
+		 * K/SS_to_K/MS will complain if any markersummaries already exist
 		 *  when processing a workmarker
 		 * Normally you would use 'processed' if the markersummaries
 		 *  are OK, and just the workmarker failed to be updated to
@@ -6601,7 +6652,7 @@ static char *cmd_pshift(__maybe_unused PGconn *conn, char *cmd, char *id,
 			  __maybe_unused tv_t *notcd, K_TREE *trf_root,
 			  __maybe_unused bool reload_data)
 {
-	K_ITEM *i_username;
+	INTRANSIENT *in_username;
 	K_ITEM *u_item, *p_item, *m_item, *wm_item, *ms_item, *wi_item;
 	K_TREE_CTX wm_ctx[1];
 	WORKMARKERS *wm;
@@ -6622,12 +6673,12 @@ static char *cmd_pshift(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
 
-	i_username = adminuser(trf_root, reply, siz);
-	if (!i_username)
+	in_username = adminuser(trf_root, reply, siz);
+	if (!in_username)
 		return strdup(reply);
 
 	K_RLOCK(users_free);
-	u_item = find_users(transfer_data(i_username));
+	u_item = find_users(in_username->str);
 	K_RUNLOCK(users_free);
 	if (!u_item)
 		return strdup("bad");
@@ -6799,12 +6850,11 @@ static char *cmd_pshift(__maybe_unused PGconn *conn, char *cmd, char *id,
 	snprintf(tmp, sizeof(tmp), ",%d_", 0);
 	APPEND_REALLOC(buf, off, len, tmp);
 
-	LOGDEBUG("%s.ok.%s", id, transfer_data(i_username));
+	LOGDEBUG("%s.ok.%s", id, in_username->str);
 	return(buf);
 }
 
-/* Show a share status report on the console
- * Currently: sequence status, OoO info and max_sockd_count */
+// Show a status report on the console
 static char *cmd_shsta(__maybe_unused PGconn *conn, char *cmd, char *id,
 			tv_t *now, __maybe_unused char *by,
 			__maybe_unused char *code, __maybe_unused char *inet,
@@ -6812,122 +6862,9 @@ static char *cmd_shsta(__maybe_unused PGconn *conn, char *cmd, char *id,
 			__maybe_unused K_TREE *trf_root,
 			__maybe_unused bool reload_data)
 {
-	char ooo_buf[256];
 	char buf[256];
-	int relq_count, _reload_processing, relqd_count;
-	int cmdq_count, _cmd_processing, cmdqd_count, _max_sockd_count;
-	int pool0_count, poolq_count, rep_max_fd;
-	int64_t _earlysock_left, _pool0_discarded, _pool0_tot;
-	uint64_t count1, count2, count3, count4;
-	double tot1, tot2;
 
-	LOGWARNING("OoO %s", ooo_status(ooo_buf, sizeof(ooo_buf)));
-	sequence_report(true);
-
-	K_RLOCK(breakqueue_free);
-	relq_count = reload_breakqueue_store->count;
-	_reload_processing = reload_processing;
-	relqd_count = reload_done_breakqueue_store->count;
-	cmdq_count = cmd_breakqueue_store->count;
-	_cmd_processing = cmd_processing;
-	cmdqd_count = cmd_done_breakqueue_store->count;
-	_max_sockd_count = max_sockd_count;
-	K_RUNLOCK(breakqueue_free);
-
-	K_RLOCK(workqueue_free);
-	_earlysock_left = earlysock_left;
-	pool0_count = pool0_workqueue_store->count;
-	_pool0_discarded = pool0_discarded;
-	_pool0_tot = pool0_tot;
-	poolq_count = pool_workqueue_store->count;
-	K_RUNLOCK(workqueue_free);
-
-	LOGWARNING(" reload=rq%d/rp%d/rd%d cmd=cq%d/cp%d/cd%d es=%"PRId64
-		   " pool0=c%d/d%"PRId64"/t%"PRId64" poolq=c%d max_sockd=%d",
-		   relq_count, _reload_processing, relqd_count,
-		   cmdq_count, _cmd_processing, cmdqd_count,
-		   _earlysock_left,
-		   pool0_count, _pool0_discarded, _pool0_tot,
-		   poolq_count, _max_sockd_count);
-
-	count1 = sock_acc ? : 1;
-	count2 = sock_recv ? : 1;
-	count3 = sock_proc_early ? : 1;
-	count4 = sock_processed ? : 1;
-	LOGWARNING(" sock: t%fs sock t%fs/t%"PRIu64"/av%fs"
-		   " recv t%fs/t%"PRIu64"/av%fs"
-		   " lckw t%fs/t%"PRIu64"/av%fs"
-		   " lckb t%fs/t%"PRIu64"/av%fs",
-		   tvdiff(now, &sock_stt),
-		   sock_us/1000000, sock_acc, (sock_us/count1)/1000000,
-		   sock_recv_us/1000000, sock_recv,
-		   (sock_recv_us/count2)/1000000,
-		   sock_lock_wq_us/1000000, sock_proc_early,
-		   (sock_lock_wq_us/count3)/1000000,
-		   sock_lock_br_us/1000000, sock_processed,
-		   (sock_lock_br_us/count4)/1000000);
-
-	if (!break_reload_stt.tv_sec)
-		tot1 = 0;
-	else {
-		if (!break_reload_fin.tv_sec)
-			tot1 = tvdiff(now, &break_reload_stt);
-		else
-			tot1 = tvdiff(&break_reload_fin, &break_reload_stt);
-	}
-	if (!break_cmd_stt.tv_sec)
-		tot2 = 0;
-	else
-		tot2 = tvdiff(now, &break_cmd_stt);
-	count1 = break_reload_processed ? : 1;
-	count2 = break_cmd_processed ? : 1;
-	LOGWARNING(" break reload: t%fs/t%"PRIu64"/av%fs "
-		   "%"PRIu64"s/%"PRIu64"w/%"PRIu64"t"
-		   " cmd: t%fs/t%"PRIu64"/av%fs "
-		   "%"PRIu64"s/%"PRIu64"w/%"PRIu64"t",
-		   tot1, break_reload_processed, tot1/count1,
-		   bq_reload_signals, bq_reload_wakes, bq_reload_timeouts,
-		   tot2, break_cmd_processed, tot2/count2,
-		   bq_cmd_signals, bq_cmd_wakes, bq_cmd_timeouts);
-
-	LOGWARNING(" queue reload: %"PRIu64"s/%"PRIu64"w/%"PRIu64"t"
-		   " cmd: %"PRIu64"s/%"PRIu64"w/%"PRIu64"t",
-		   process_reload_signals, process_reload_wakes,
-		   process_reload_timeouts,
-		   process_socket_signals, process_socket_wakes,
-		   process_socket_timeouts);
-
-	LOGWARNING(" process pool: %"PRIu64"s/%"PRIu64"w/%"PRIu64"t"
-		   " cmd: %"PRIu64"s/%"PRIu64"w/%"PRIu64"t"
-		   " btc: %"PRIu64"s/%"PRIu64"w/%"PRIu64"t",
-		   wq_pool_signals, wq_pool_wakes, wq_pool_timeouts,
-		   wq_cmd_signals, wq_cmd_wakes, wq_cmd_timeouts,
-		   wq_btc_signals, wq_btc_wakes, wq_btc_timeouts);
-
-	count1 = clis_processed ? : 1;
-	count2 = blis_processed ? : 1;
-	LOGWARNING(" clistener: t%fs/t%"PRIu64"/av%fs"
-		   " blistener: t%fs/t%"PRIu64"/av%fs",
-		   clis_us/1000000, clis_processed, (clis_us/count1)/1000000,
-		   blis_us/1000000, blis_processed, (blis_us/count2)/1000000);
-
-	rep_max_fd = rep_max_pool_sockd_fd;
-	if (rep_max_fd < rep_max_cmd_sockd_fd)
-		rep_max_fd = rep_max_cmd_sockd_fd;
-	if (rep_max_fd < rep_max_btc_sockd_fd)
-		rep_max_fd = rep_max_btc_sockd_fd;
-	LOGWARNING(" replies t%d/^%d/^%dfd/f%d pool ^%d/^%dfd cmd ^%d/^%dfd"
-		   " btc ^%d/^%dfd",
-		   rep_tot_sockd, rep_max_sockd, rep_max_fd, rep_failed_sockd,
-		   rep_max_pool_sockd, rep_max_pool_sockd_fd,
-		   rep_max_cmd_sockd, rep_max_cmd_sockd_fd,
-		   rep_max_btc_sockd, rep_max_btc_sockd_fd);
-
-	count1 = reply_sent ? : 1;
-	LOGWARNING(" sent t%"PRIu64"/x%"PRIu64"/d%"PRIu64"/f%"PRIu64
-		   "/t%fs/av%fs",
-		   reply_sent, reply_cant, reply_discarded, reply_fails,
-		   reply_full_us/1000000, (reply_full_us/count1)/1000000);
+	status_report(now, true);
 
 	snprintf(buf, sizeof(buf), "ok.%s", cmd);
 	LOGDEBUG("%s.%s", id, buf);
@@ -6961,7 +6898,7 @@ static char *cmd_userinfo(__maybe_unused PGconn *conn, char *cmd, char *id,
 	while (ui_item) {
 		DATA_USERINFO(userinfo, ui_item);
 
-		str_to_buf(userinfo->username, reply, sizeof(reply));
+		str_to_buf(userinfo->in_username, reply, sizeof(reply));
 		snprintf(tmp, sizeof(tmp), "username:%d=%s%c",
 			 rows, reply, FLDSEP);
 		APPEND_REALLOC(buf, off, len, tmp);
@@ -7119,7 +7056,7 @@ static char *cmd_query(__maybe_unused PGconn *conn, char *cmd, char *id,
 					1, (char *)intpatt,
 					reply, siz);
 		if (!i_height)
-			return strdup(reply);
+			goto badreply;
 		TXT_TO_INT("height", transfer_data(i_height), height);
 
 		i_expired = optional_name(trf_root, "expired",
@@ -7205,7 +7142,7 @@ static char *cmd_query(__maybe_unused PGconn *conn, char *cmd, char *id,
 					1, (char *)intpatt,
 					reply, siz);
 		if (!i_wid)
-			return strdup(reply);
+			goto badreply;
 		TXT_TO_BIGINT("wid", transfer_data(i_wid), wid);
 
 		i_expired = optional_name(trf_root, "expired",
@@ -7241,7 +7178,7 @@ static char *cmd_query(__maybe_unused PGconn *conn, char *cmd, char *id,
 				APPEND_REALLOC(buf, off, len, tmp);
 				snprintf(tmp, sizeof(tmp),
 					 "prevhash:%d=%s%c",
-					 rows, workinfo->prevhash, FLDSEP);
+					 rows, workinfo->in_prevhash, FLDSEP);
 				APPEND_REALLOC(buf, off, len, tmp);
 				tv_to_buf(&(workinfo->expirydate), cd_buf,
 					  sizeof(cd_buf));
@@ -7341,7 +7278,7 @@ static char *cmd_query(__maybe_unused PGconn *conn, char *cmd, char *id,
 					1, (char *)intpatt,
 					reply, siz);
 		if (!i_height)
-			return strdup(reply);
+			goto badreply;
 		TXT_TO_INT("height", transfer_data(i_height), height);
 
 		int_to_buf(height, reply, sizeof(reply));
@@ -7408,7 +7345,7 @@ static char *cmd_query(__maybe_unused PGconn *conn, char *cmd, char *id,
 					1, (char *)intpatt,
 					reply, siz);
 		if (!i_height)
-			return strdup(reply);
+			goto badreply;
 		TXT_TO_INT("height", transfer_data(i_height), height);
 
 		int_to_buf(height, reply, sizeof(reply));
@@ -7450,7 +7387,7 @@ static char *cmd_query(__maybe_unused PGconn *conn, char *cmd, char *id,
 			this_height = workinfo->height;
 			if (this_height == height) {
 				// We have our starting point
-				STRNCPY(bits, workinfo->bits);
+				STRNCPY(bits, workinfo->in_bits);
 				got = true;
 
 				bigint_to_buf(workinfo->workinfoid,
@@ -7467,7 +7404,7 @@ static char *cmd_query(__maybe_unused PGconn *conn, char *cmd, char *id,
 
 				while (wi_item) {
 					if (CURRENT(&(workinfo->expirydate))) {
-						if (strcmp(bits, workinfo->bits) != 0)
+						if (strcmp(bits, workinfo->in_bits) != 0)
 							break;
 					}
 					wi_item = next_in_ktree(ctx);
@@ -7539,7 +7476,7 @@ static char *cmd_query(__maybe_unused PGconn *conn, char *cmd, char *id,
 					1, (char *)intpatt,
 					reply, siz);
 		if (!i_height)
-			return strdup(reply);
+			goto badreply;
 		TXT_TO_INT("height", transfer_data(i_height), height);
 
 		int_to_buf(height, reply, sizeof(reply));
@@ -7648,21 +7585,261 @@ static char *cmd_query(__maybe_unused PGconn *conn, char *cmd, char *id,
 		APPEND_REALLOC(buf, off, len, tmp);
 
 		ok = true;
+	} else if (strcasecmp(request, "shareinfo") == 0) {
+		/* return share information for the workinfo with wid>=value
+		 * if wid=0 then find the oldest workinfo that has shares */
+		K_ITEM *i_wid, s_look, *s_item;
+		SHARES lookshares, *shares;
+		int64_t selwid, wid, s_count = 0, s_diff = 0, s_sdiff = 0;
+		bool found;
+
+		i_wid = require_name(trf_root, "wid",
+					1, (char *)intpatt,
+					reply, siz);
+		if (!i_wid)
+			goto badreply;
+		TXT_TO_BIGINT("wid", transfer_data(i_wid), selwid);
+
+		INIT_SHARES(&s_look);
+		lookshares.workinfoid = selwid;
+		lookshares.userid = -1;
+		lookshares.in_workername = EMPTY;
+		DATE_ZERO(&(lookshares.createdate));
+		s_look.data = (void *)(&lookshares);
+		found = false;
+		K_RLOCK(shares_free);
+		s_item = find_after_in_ktree(shares_root, &s_look, ctx);
+		if (s_item) {
+			found = true;
+			DATA_SHARES(shares, s_item);
+			wid = shares->workinfoid;
+			while (s_item) {
+				DATA_SHARES(shares, s_item);
+				if (shares->workinfoid != wid)
+					break;
+				s_count++;
+				s_diff += shares->diff;
+				if (s_sdiff < shares->sdiff)
+					s_sdiff = shares->sdiff;
+				s_item = next_in_ktree(ctx);
+			}
+		}
+		K_RUNLOCK(shares_free);
+
+		if (found) {
+			snprintf(tmp, sizeof(tmp), "selwid=%"PRId64"%c",
+				 selwid, FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			snprintf(tmp, sizeof(tmp), "wid=%"PRId64"%c",
+				 wid, FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			snprintf(tmp, sizeof(tmp), "shares=%"PRId64"%c",
+				 s_count, FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			snprintf(tmp, sizeof(tmp), "diff=%"PRId64"%c",
+				 s_diff, FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			snprintf(tmp, sizeof(tmp), "maxsdiff=%"PRId64"%c",
+				 s_sdiff, FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			rows++;
+		}
+
+		ok = true;
+	} else if (strcasecmp(request, "nameram") == 0) {
+		NAMERAM *nameram = NULL;
+		K_ITEM *n_item;
+
+		K_RLOCK(nameram_free);
+		n_item = STORE_RHEAD(nameram_store);
+		while (n_item) {
+			DATA_NAMERAM(nameram, n_item);
+			snprintf(tmp, sizeof(tmp), "rem:%d=%d%c",
+				 rows, (int)sizeof(nameram->rem), FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			snprintf(tmp, sizeof(tmp), "left:%d=%d%c",
+				 rows, (int)(nameram->left), FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			n_item = n_item->next;
+			rows++;
+		}
+		K_RUNLOCK(nameram_free);
+		snprintf(tmp, sizeof(tmp), "flds=%s%c", "rem,left", FLDSEP);
+		APPEND_REALLOC(buf, off, len, tmp);
+		snprintf(tmp, sizeof(tmp), "arn=%s%carp=%s%c",
+			 "NameRAM", FLDSEP, "", FLDSEP);
+		APPEND_REALLOC(buf, off, len, tmp);
+
+		ok = true;
+	} else if (strcasecmp(request, "ioqueue") == 0) {
+		K_RLOCK(ioqueue_free);
+		snprintf(tmp, sizeof(tmp), "console=%d%c",
+			 console_ioqueue_store->count, FLDSEP);
+		APPEND_REALLOC(buf, off, len, tmp);
+		snprintf(tmp, sizeof(tmp), "file=%d%c",
+			 ioqueue_store->count, FLDSEP);
+		APPEND_REALLOC(buf, off, len, tmp);
+		K_RUNLOCK(ioqueue_free);
+		rows++;
+
+		ok = true;
+	} else if (strcasecmp(request, "esm") == 0) {
+		K_ITEM *esm_item;
+		ESM *esm = NULL;
+
+		K_RLOCK(esm_free);
+		esm_item = first_in_ktree(esm_root, ctx);
+		while (esm_item) {
+			DATA_ESM(esm, esm_item);
+			snprintf(tmp, sizeof(tmp), "workinfoid:%d=%"PRId64"%c",
+				 rows, esm->workinfoid, FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			snprintf(tmp, sizeof(tmp), "queued:%d=%d%c",
+				 rows, esm->queued, FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			snprintf(tmp, sizeof(tmp), "procured:%d=%d%c",
+				 rows, esm->procured, FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			snprintf(tmp, sizeof(tmp), "discarded:%d=%d%c",
+				 rows, esm->discarded, FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			snprintf(tmp, sizeof(tmp), "errqueued:%d=%d%c",
+				 rows, esm->errqueued, FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			snprintf(tmp, sizeof(tmp), "errprocured:%d=%d%c",
+				 rows, esm->errprocured, FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			snprintf(tmp, sizeof(tmp), "errdiscarded:%d=%d%c",
+				 rows, esm->errdiscarded, FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			tv_to_buf(&(esm->createdate), cd_buf, sizeof(cd_buf));
+			snprintf(tmp, sizeof(tmp), CDDB"_str:%d=%s%c",
+				 rows, cd_buf, FLDSEP);
+			APPEND_REALLOC(buf, off, len, tmp);
+			esm_item = next_in_ktree(ctx);
+			rows++;
+		}
+		K_RUNLOCK(esm_free);
+		snprintf(tmp, sizeof(tmp), "flds=%s%c",
+			 "workinfoid,queued,procured,discarded,errqueued,"
+			 "errprocured,errdiscarded,"CDDB"_str", FLDSEP);
+		APPEND_REALLOC(buf, off, len, tmp);
+		snprintf(tmp, sizeof(tmp), "arn=%s%carp=%s%c",
+			 "ESM", FLDSEP, "", FLDSEP);
+		APPEND_REALLOC(buf, off, len, tmp);
+
+		ok = true;
+	} else if (strcasecmp(request, "pg") == 0) {
+		K_RLOCK(pgdb_free);
+		snprintf(tmp, sizeof(tmp), "connections=%d%c",
+			 pgdb_count, FLDSEP);
+		APPEND_REALLOC(buf, off, len, tmp);
+		K_RUNLOCK(pgdb_free);
+		rows++;
+
+		ok = true;
+#if 0
+	} else if (strcasecmp(request, "transfer") == 0) {
+		/* Code for debugging the transfer stores
+		 *  limit is set to avoid a very large reply,
+		 *  since transfer can be millions of items during a reload */
+		TRANSFER *trf = NULL;
+		K_STORE *trf_store;
+		K_ITEM *trf_item, *i_limit;
+		int stores = 0, limit = 20, tot_stores = 0;
+		bool exceeded = false;
+
+		i_limit = optional_name(trf_root, "limit",
+					1, (char *)intpatt,
+					reply, siz);
+		if (*reply) {
+			LOGERR("%s() %s.%s", __func__, id, reply);
+			goto badreply;
+		}
+		if (i_limit)
+			limit = atoi(transfer_data(i_limit));
+
+		snprintf(tmp, sizeof(tmp), "limit=%d%c", limit, FLDSEP);
+		APPEND_REALLOC(buf, off, len, tmp);
+
+		K_RLOCK(transfer_free);
+		trf_store = transfer_free->next_store;
+		while (!exceeded && trf_store) {
+			trf_item = trf_store->head;
+			while (trf_item) {
+				if (rows >= limit) {
+					exceeded = true;
+					break;
+				}
+				DATA_TRANSFER(trf, trf_item);
+				snprintf(tmp, sizeof(tmp), "store:%d=%d%c",
+					 rows, stores, FLDSEP);
+				APPEND_REALLOC(buf, off, len, tmp);
+				snprintf(tmp, sizeof(tmp), "storename:%d=%s%c",
+					 rows, trf_store->name, FLDSEP);
+				APPEND_REALLOC(buf, off, len, tmp);
+				snprintf(tmp, sizeof(tmp), "name:%d=%s%c",
+					 rows, trf->name, FLDSEP);
+				APPEND_REALLOC(buf, off, len, tmp);
+				snprintf(tmp, sizeof(tmp), "mvalue:%d=%s%c",
+					 rows, trf->mvalue, FLDSEP);
+				APPEND_REALLOC(buf, off, len, tmp);
+				snprintf(tmp, sizeof(tmp),
+					 "malloc:%d=%"PRIu64"%c",
+					 rows, trf->msiz, FLDSEP);
+				APPEND_REALLOC(buf, off, len, tmp);
+				snprintf(tmp, sizeof(tmp), "intrans:%d=%c%c",
+					 rows, trf->intransient ? 'Y' : 'N',
+					 FLDSEP);
+				APPEND_REALLOC(buf, off, len, tmp);
+
+				trf_item = trf_item->next;
+				rows++;
+			}
+			trf_store = trf_store->next_store;
+			stores++;
+		}
+		tot_stores = stores;
+		if (exceeded) {
+			while (trf_store) {
+				trf_store = trf_store->next_store;
+				tot_stores++;
+			}
+		}
+		K_RUNLOCK(transfer_free);
+
+		snprintf(tmp, sizeof(tmp), "rowstores=%d%c",
+			 stores, FLDSEP);
+		APPEND_REALLOC(buf, off, len, tmp);
+		snprintf(tmp, sizeof(tmp), "totstores=%d%c",
+			 tot_stores, FLDSEP);
+		APPEND_REALLOC(buf, off, len, tmp);
+		snprintf(tmp, sizeof(tmp), "limitexceeded=%c%c",
+			 exceeded ? 'Y' : 'N', FLDSEP);
+		APPEND_REALLOC(buf, off, len, tmp);
+
+		snprintf(tmp, sizeof(tmp), "flds=%s%c",
+			 "store,storename,name,mvalue,malloc,intrans", FLDSEP);
+		APPEND_REALLOC(buf, off, len, tmp);
+		snprintf(tmp, sizeof(tmp), "arn=%s%carp=%s%c",
+			 transfer_free->name, FLDSEP, "", FLDSEP);
+		APPEND_REALLOC(buf, off, len, tmp);
+
+		ok = true;
+#endif
 	} else {
-		free(buf);
 		snprintf(reply, siz, "unknown request '%s'", request);
 		LOGERR("%s() %s.%s", __func__, id, reply);
-		return strdup(reply);
+		goto badreply;
 	}
 
 	if (!ok) {
-		free(buf);
 		snprintf(reply, siz, "failed.%s%s%s",
 					request,
 					msg[0] ? " " : "",
 					msg[0] ? msg : "");
 		LOGERR("%s() %s.%s", __func__, id, reply);
-		return strdup(reply);
+		goto badreply;
 	}
 
 	snprintf(tmp, sizeof(tmp), "rows=%d", rows);
@@ -7671,6 +7848,10 @@ static char *cmd_query(__maybe_unused PGconn *conn, char *cmd, char *id,
 				     msg[0] ? " " : "",
 				     msg[0] ? msg : "");
 	return buf;
+
+badreply:
+	free(buf);
+	return strdup(reply);
 }
 
 // Query and disable internal lock detection code
@@ -8298,10 +8479,7 @@ static char *cmd_high(PGconn *conn, char *cmd, char *id,
 	if (strcasecmp(action, "store") == 0) {
 		/* Store the shares_hi_root list in the db now,
 		 * rather than wait for a shift process to do it */
-		if (!conn) {
-			conn = dbconnect();
-			conned = true;
-		}
+		conned = CKPQConn(&conn);
 		count = 0;
 		do {
 			did = false;
@@ -8316,8 +8494,7 @@ static char *cmd_high(PGconn *conn, char *cmd, char *id,
 				count++;
 			}
 		} while (did);
-		if (conned)
-			PQfinish(conn);
+		conned = CKPQDisco(&conn, conned);
 		if (count) {
 			LOGWARNING("%s() Stored: %d high shares",
 				   __func__, count);
@@ -8336,6 +8513,166 @@ static char *cmd_high(PGconn *conn, char *cmd, char *id,
 	}
 
 	return buf;
+}
+
+// Running thread adjustments
+static char *cmd_threads(__maybe_unused PGconn *conn, char *cmd, char *id,
+			 __maybe_unused tv_t *now, __maybe_unused char *by,
+			 __maybe_unused char *code, __maybe_unused char *inet,
+			 __maybe_unused tv_t *cd, K_TREE *trf_root,
+			 __maybe_unused bool reload_data)
+{
+	K_ITEM *i_name, *i_delta;
+	char *name, *delta;
+	char reply[1024] = "";
+	size_t siz = sizeof(reply);
+	char *buf = NULL;
+	int delta_value = 0;
+
+	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
+
+	i_name = require_name(trf_root, "name", 1, NULL, reply, siz);
+	if (!i_name)
+		return strdup(reply);
+	name = transfer_data(i_name);
+	i_delta = require_name(trf_root, "delta", 2, NULL, reply, siz);
+	if (!i_delta)
+		return strdup(reply);
+	delta = transfer_data(i_delta);
+	if (*delta != '+' && *delta != '-') {
+		snprintf(reply, siz, "invalid delta '%s'", delta);
+		LOGERR("%s() %s.%s", __func__, id, reply);
+		return strdup(reply);
+	}
+	delta_value = atoi(delta+1);
+	if (delta_value < 1 || delta_value >= THREAD_LIMIT) {
+		snprintf(reply, siz, "invalid delta range '%s'", delta);
+		LOGERR("%s() %s.%s", __func__, id, reply);
+		return strdup(reply);
+	}
+	if (*delta == '-')
+		delta_value = -delta_value;
+
+	if (strcasecmp(name, "pr") == 0 ||
+	    strcasecmp(name, "process_reload") == 0) {
+		K_WLOCK(breakqueue_free);
+		// Just overwrite whatever's there
+		reload_queue_threads_delta = delta_value;
+		K_WUNLOCK(breakqueue_free);
+		snprintf(reply, siz, "ok.delta %d request sent", delta_value);
+		return strdup(reply);
+	} else if (strcasecmp(name, "pq") == 0 ||
+		   strcasecmp(name, "pqproc") == 0) {
+		K_WLOCK(workqueue_free);
+		// Just overwrite whatever's there
+		proc_queue_threads_delta = delta_value;
+		K_WUNLOCK(workqueue_free);
+		snprintf(reply, siz, "ok.delta %d request sent", delta_value);
+		return strdup(reply);
+	} else if (strcasecmp(name, "rb") == 0 ||
+		   strcasecmp(name, "reload_breaker") == 0) {
+		K_WLOCK(breakqueue_free);
+		// Just overwrite whatever's there
+		reload_breakdown_threads_delta = delta_value;
+		K_WUNLOCK(breakqueue_free);
+		snprintf(reply, siz, "ok.delta %d request sent", delta_value);
+		return strdup(reply);
+	} else if (strcasecmp(name, "cb") == 0 ||
+		   strcasecmp(name, "cmd_breaker") == 0) {
+		K_WLOCK(breakqueue_free);
+		// Just overwrite whatever's there
+		cmd_breakdown_threads_delta = delta_value;
+		K_WUNLOCK(breakqueue_free);
+		snprintf(reply, siz, "ok.delta %d request sent", delta_value);
+		return strdup(reply);
+	} else if (strcasecmp(name, "cl") == 0 ||
+		   strcasecmp(name, "cmd_listener") == 0) {
+		K_WLOCK(workqueue_free);
+		// Just overwrite whatever's there
+		cmd_listener_threads_delta = delta_value;
+		K_WUNLOCK(workqueue_free);
+		snprintf(reply, siz, "ok.delta %d request sent", delta_value);
+		return strdup(reply);
+	} else if (strcasecmp(name, "bl") == 0 ||
+		   strcasecmp(name, "btc_listener") == 0) {
+		K_WLOCK(workqueue_free);
+		// Just overwrite whatever's there
+		btc_listener_threads_delta = delta_value;
+		K_WUNLOCK(workqueue_free);
+		snprintf(reply, siz, "ok.delta %d request sent", delta_value);
+		return strdup(reply);
+	} else {
+		snprintf(reply, siz, "unknown name '%s'", name);
+		LOGERR("%s() %s.%s", __func__, id, reply);
+		return strdup(reply);
+	}
+
+	return buf;
+}
+
+static char *cmd_pause(__maybe_unused PGconn *conn, char *cmd, char *id,
+			__maybe_unused tv_t *now, __maybe_unused char *by,
+			__maybe_unused char *code, __maybe_unused char *inet,
+			__maybe_unused tv_t *cd, K_TREE *trf_root,
+			__maybe_unused bool reload_data)
+{
+	K_ITEM *i_name;
+	char reply[1024] = "";
+	size_t siz = sizeof(reply);
+	char *name;
+
+	LOGDEBUG("%s(): cmd '%s'", __func__, cmd);
+
+	i_name = require_name(trf_root, "name", 1, NULL, reply, siz);
+	if (!i_name)
+		return strdup(reply);
+	name = transfer_data(i_name);
+
+	/* Pause the breaker threads to help culling to take place for some
+	 *  tables that can be culled but 'never' empty due to threads always
+	 *  creating new data before the old data has finished being processed
+	 * N.B. this should only be needed on a sizeable pool, once after
+	 *  the reload completes ... and even 499ms would be a long time to
+	 *  pause in the case of a sizeable pool ... DANGER, WILL ROBINSON! */
+	if (strcasecmp(name, "breaker") == 0) {
+		K_ITEM *i_ms;
+		int ms = 100;
+
+		i_ms = optional_name(trf_root, "ms", 1, NULL, reply, siz);
+		if (*reply)
+			return strdup(reply);
+		if (i_ms) {
+			ms = atoi(transfer_data(i_ms));
+			// 4999 is too long, don't do it!
+			if (ms < 10 || ms > 4999) {
+				snprintf(reply, siz,
+					 "%s ms %d outside range 10-4999",
+					 name, ms);
+				goto out;
+			}
+		}
+
+		if (!reload_queue_complete && !key_update) {
+			snprintf(reply, siz,
+				 "no point pausing %s before reload completes",
+				 name);
+			goto out;
+		}
+
+		/* Use an absolute start time to try to get all threads asleep
+		 *  at the same time */
+		K_WLOCK(breakqueue_free);
+		cksleep_prepare_r(&breaker_sleep_stt);
+		breaker_sleep_ms = ms;
+		K_WUNLOCK(breakqueue_free);
+		snprintf(reply, siz, "ok.%s %s%dms pause sent", name,
+					ms > 499 ? "ALERT!!! " : EMPTY, ms);
+	} else
+		snprintf(reply, siz, "unknown name '%s'", name);
+
+out:
+	LOGWARNING("%s() %s.%s", __func__, id, reply);
+	return strdup(reply);
 }
 
 /* The socket command format is as follows:
@@ -8404,10 +8741,10 @@ struct CMDS ckdb_cmds[] = {
 	{ CMD_VERSION,	"version",	true,	false,	NULL,		SEQ_NONE,	ACCESS_SYSTEM | ACCESS_WEB },
 	{ CMD_LOGLEVEL,	"loglevel",	true,	false,	NULL,		SEQ_NONE,	ACCESS_SYSTEM },
 	{ CMD_FLUSH,	"flush",	true,	false,	NULL,		SEQ_NONE,	ACCESS_SYSTEM },
-	{ CMD_SHARELOG,	STR_WORKINFO,	false,	true,	cmd_sharelog,	SEQ_WORKINFO,	ACCESS_POOL },
-	{ CMD_SHARELOG,	STR_SHARES,	false,	true,	cmd_sharelog,	SEQ_SHARES,	ACCESS_POOL },
-	{ CMD_SHARELOG,	STR_SHAREERRORS,false,	true,	cmd_sharelog,	SEQ_SHAREERRORS,ACCESS_POOL },
-	{ CMD_SHARELOG,	STR_AGEWORKINFO,false,	true,	cmd_sharelog,	SEQ_AGEWORKINFO,ACCESS_POOL },
+	{ CMD_WORKINFO,	STR_WORKINFO,	false,	true,	cmd_sharelog,	SEQ_WORKINFO,	ACCESS_POOL },
+	{ CMD_SHARES,	STR_SHARES,	false,	true,	cmd_sharelog,	SEQ_SHARES,	ACCESS_POOL },
+	{ CMD_SHAREERRORS,STR_SHAREERRORS,false,true,	cmd_sharelog,	SEQ_SHAREERRORS,ACCESS_POOL },
+	{ CMD_AGEWORKINFO,STR_AGEWORKINFO,false,true,	cmd_sharelog,	SEQ_AGEWORKINFO,ACCESS_POOL },
 	{ CMD_AUTH,	"authorise",	false,	true,	cmd_auth,	SEQ_AUTH,	ACCESS_POOL },
 	{ CMD_ADDRAUTH,	"addrauth",	false,	true,	cmd_addrauth,	SEQ_ADDRAUTH,	ACCESS_POOL },
 	{ CMD_HEARTBEAT,"heartbeat",	false,	true,	cmd_heartbeat,	SEQ_HEARTBEAT,	ACCESS_POOL },
@@ -8448,7 +8785,9 @@ struct CMDS ckdb_cmds[] = {
 	{ CMD_BTCSET,	"btcset",	false,	false,	cmd_btcset,	SEQ_NONE,	ACCESS_SYSTEM },
 	{ CMD_QUERY,	"query",	false,	false,	cmd_query,	SEQ_NONE,	ACCESS_SYSTEM },
 	{ CMD_LOCKS,	"locks",	false,	false,	cmd_locks,	SEQ_NONE,	ACCESS_SYSTEM },
-	{ CMD_EVENTS,	"events",	false,	false,	cmd_events,	SEQ_NONE,	ACCESS_SYSTEM },
+	{ CMD_EVENTS,	"events",	false,	false,	cmd_events,	SEQ_NONE,	ACCESS_SYSTEM | ACCESS_WEB },
 	{ CMD_HIGH,	"high",		false,	false,	cmd_high,	SEQ_NONE,	ACCESS_SYSTEM },
+	{ CMD_THREADS,	"threads",	false,	false,	cmd_threads,	SEQ_NONE,	ACCESS_SYSTEM },
+	{ CMD_PAUSE,	"pause",	false,	false,	cmd_pause,	SEQ_NONE,	ACCESS_SYSTEM },
 	{ CMD_END,	NULL,		false,	false,	NULL,		SEQ_NONE,	0 }
 };

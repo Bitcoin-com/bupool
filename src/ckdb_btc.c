@@ -358,7 +358,7 @@ bool btc_orphancheck(BLOCKS *blocks)
 		ok = blocks_add(NULL, blocks->height,
 				      blocks->blockhash,
 				      BLOCKS_ORPHAN_STR, EMPTY,
-				      EMPTY, EMPTY, EMPTY, EMPTY,
+				      EMPTY, EMPTY, NULL, EMPTY,
 				      EMPTY, EMPTY, EMPTY, EMPTY,
 				      by_default, (char *)__func__, inet_default,
 				      &now, false, id_default, NULL);
@@ -430,7 +430,7 @@ void btc_blockstatus(BLOCKS *blocks)
 		ok = blocks_add(NULL, blocks->height,
 				      blocks->blockhash,
 				      BLOCKS_42_STR, EMPTY,
-				      EMPTY, EMPTY, EMPTY, EMPTY,
+				      EMPTY, EMPTY, NULL, EMPTY,
 				      EMPTY, EMPTY, EMPTY, EMPTY,
 				      by_default, (char *)__func__, inet_default,
 				      &now, false, id_default, NULL);

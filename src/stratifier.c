@@ -1,6 +1,6 @@
 /*
  * Copyright 2014-2016 Con Kolivas
- * Copyright 2016 G. Andrew Stone
+ * Copyright 2016 Andrew Stone
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the Free
@@ -33,7 +33,9 @@
 #include "connector.h"
 #include "generator.h"
 
-#define EMPTY_BLOCK_FILE "/tmp/emptyblock.json"
+void *spyMiningMonitor(void *arg);
+extern bool miningEmptyBlock; 
+extern uint64_t curBlockHeight;
 
 #define MIN1	60
 #define MIN5	300
@@ -118,6 +120,8 @@ struct workbase {
 	int txns;
 	char *txn_data;
 	char *txn_hashes;
+	char witnessdata[80]; //null-terminated ascii
+	bool insert_witness;
 	int merkles;
 	char merklehash[WORKBIN_NUM_MERKLE_BINS][68];
 	char merklebin[WORKBIN_NUM_MERKLE_BINS][32];
@@ -373,6 +377,7 @@ struct proxy_base {
 	proxy_t *subproxies; /* Hashlist of subproxies sorted by subid */
 	sdata_t *sdata; /* Unique stratifer data for each subproxy */
 	bool dead;
+	bool deleted;
 };
 
 typedef struct session session_t;
@@ -590,6 +595,8 @@ static void info_msg_entries(char_entry_t **entries)
 	}
 }
 
+static const int witnessdata_size = 36; // commitment header + hash
+
 static void generate_coinbase(const ckpool_t *ckp, workbase_t *wb)
 {
 	uint64_t *u64, g64, d64 = 0;
@@ -667,9 +674,9 @@ static void generate_coinbase(const ckpool_t *ckp, workbase_t *wb)
 	if (ckp->donvalid) {
 		d64 = g64 / 200; // 0.5% donation
 		g64 -= d64; // To guarantee integers add up to the original coinbasevalue
-		wb->coinb2bin[wb->coinb2len++] = 2; // 2 transactions
+		wb->coinb2bin[wb->coinb2len++] = 2 + wb->insert_witness;
 	} else
-		wb->coinb2bin[wb->coinb2len++] = 1; // 2 transactions
+		wb->coinb2bin[wb->coinb2len++] = 1 + wb->insert_witness;
 
 	u64 = (uint64_t *)&wb->coinb2bin[wb->coinb2len];
 	*u64 = htole64(g64);
@@ -678,6 +685,18 @@ static void generate_coinbase(const ckpool_t *ckp, workbase_t *wb)
 	wb->coinb2bin[wb->coinb2len++] = sdata->pubkeytxnlen;
 	memcpy(wb->coinb2bin + wb->coinb2len, sdata->pubkeytxnbin, sdata->pubkeytxnlen);
 	wb->coinb2len += sdata->pubkeytxnlen;
+
+	if (wb->insert_witness) {
+		// 0 value
+		wb->coinb2len += 8;
+
+		wb->coinb2bin[wb->coinb2len++] = witnessdata_size + 2; // total scriptPubKey size
+		wb->coinb2bin[wb->coinb2len++] = 0x6a; // OP_RETURN
+		wb->coinb2bin[wb->coinb2len++] = witnessdata_size;
+
+		hex2bin(&wb->coinb2bin[wb->coinb2len], wb->witnessdata, witnessdata_size);
+		wb->coinb2len += witnessdata_size;
+	}
 
 	if (ckp->donvalid) {
 		u64 = (uint64_t *)&wb->coinb2bin[wb->coinb2len];
@@ -796,30 +815,31 @@ out:
 static void _ckdbq_add(ckpool_t *ckp, const int idtype, json_t *val, const char *file,
 		       const char *func, const int line)
 {
-	static time_t time_counter;
 	sdata_t *sdata = ckp->sdata;
+	static time_t time_counter;
 	static int counter = 0;
 	char *json_msg;
-	time_t now_t;
-	char ch;
 
 	if (unlikely(!val)) {
 		LOGWARNING("Invalid json sent to ckdbq_add from %s %s:%d", file, func, line);
 		return;
 	}
 
-	now_t = time(NULL);
-	if (now_t != time_counter) {
-		pool_stats_t *stats = &sdata->stats;
-		char hashrate[16];
+	if (!ckp->quiet) {
+		time_t now_t = time(NULL);
 
-		/* Rate limit to 1 update per second */
-		time_counter = now_t;
-		suffix_string(stats->dsps1 * nonces, hashrate, 16, 3);
-		ch = status_chars[(counter++) & 0x3];
-		fprintf(stdout, "\33[2K\r%c %sH/s  %.1f SPS  %d users  %d workers",
-			ch, hashrate, stats->sps1, stats->users, stats->workers);
-		fflush(stdout);
+		if (now_t != time_counter) {
+			pool_stats_t *stats = &sdata->stats;
+			char hashrate[16], ch;
+
+			/* Rate limit to 1 update per second */
+			time_counter = now_t;
+			suffix_string(stats->dsps1 * nonces, hashrate, 16, 3);
+			ch = status_chars[(counter++) & 0x3];
+			fprintf(stdout, "\33[2K\r%c %sH/s  %.1f SPS  %d users  %d workers",
+				ch, hashrate, stats->sps1, stats->users, stats->workers);
+			fflush(stdout);
+		}
 	}
 
 	if (CKP_STANDALONE(ckp))
@@ -1277,36 +1297,30 @@ static void wb_merkle_bins(ckpool_t *ckp, sdata_t *sdata, workbase_t *wb, json_t
 		memset(wb->txn_hashes, 0x20, wb->txns * 65); // Spaces
 
 		for (i = 0; i < wb->txns; i++) {
+			const char *txid, *hash;
 			char binswap[32];
-			const char *hash;
 
 			arr_val = json_array_get(txn_array, i);
+
+			// Post-segwit, txid returns the tx hash without witness data
+			txid = json_string_value(json_object_get(arr_val, "txid"));
 			hash = json_string_value(json_object_get(arr_val, "hash"));
+			if (!txid)
+				txid = hash;
+			if (unlikely(!txid)) {
+				LOGERR("Missing txid for transaction in wb_merkle_bins");
+				return;
+			}
 			txn = json_string_value(json_object_get(arr_val, "data"));
 			add_txn(ckp, sdata, &txns, hash, txn);
 			len = strlen(txn);
 			memcpy(wb->txn_data + ofs, txn, len);
 			ofs += len;
-#if 0
-			/* In case we ever want to be a gbt poolproxy */
-			if (!hash) {
-				char *txn_bin;
-				int txn_len;
-
-				txn_len = len / 2;
-				txn_bin = ckalloc(txn_len);
-				hex2bin(txn_bin, txn, txn_len);
-				/* This is needed for pooled mining since only
-				 * transaction data and not hashes are sent */
-				gen_hash(txn_bin, hashbin + 32 + 32 * i, txn_len);
-				continue;
-			}
-#endif
-			if (!hex2bin(binswap, hash, 32)) {
+			if (!hex2bin(binswap, txid, 32)) {
 				LOGERR("Failed to hex2bin hash in gbt_merkle_bins");
 				return;
 			}
-			memcpy(wb->txn_hashes + i * 65, hash, 64);
+			memcpy(wb->txn_hashes + i * 65, txid, 64);
 			bswap_256(hashbin + 32 + 32 * i, binswap);
 		}
 	} else
@@ -1374,210 +1388,57 @@ static void wb_merkle_bins(ckpool_t *ckp, sdata_t *sdata, workbase_t *wb, json_t
 		LOGINFO("Stratifier added %d transactions and purged %d", added, purged);
 }
 
-uint64_t curBlockHeight=0;
+static const unsigned char witness_nonce[32] = {0};
+static const int witness_nonce_size = sizeof(witness_nonce);
+static const unsigned char witness_header[] = {0xaa, 0x21, 0xa9, 0xed};
+static const int witness_header_size = sizeof(witness_header);
 
-static char* grab_empty_block()
+static void gbt_witness_data(workbase_t *wb, json_t *txn_array)
 {
-    FILE* fp;
-    fp = fopen(EMPTY_BLOCK_FILE,"r");
-    if (fp)
-    {
-      char* ret = malloc(8000);
-      int amt = fread(ret,sizeof(char),8000,fp);    
-      fclose(fp);
-      if (amt)
-      {
-        ret[amt]=0;
-        truncate(EMPTY_BLOCK_FILE,0);        
-        return ret;
-      }
-      free(ret);
-    }
-    return NULL;
+	int i, binlen, txncount = json_array_size(txn_array);
+	const char* hash;
+	json_t *arr_val;
+	uchar *hashbin;
+
+	binlen = txncount * 32 + 32;
+	hashbin = alloca(binlen + 32);
+	memset(hashbin, 0, 32);
+
+	for (i = 0; i < txncount; i++) {
+		char binswap[32];
+
+		arr_val = json_array_get(txn_array, i);
+		hash = json_string_value(json_object_get(arr_val, "hash"));
+		if (unlikely(!hash)) {
+			LOGERR("Hash missing for transaction");
+			return;
+		}
+		if (!hex2bin(binswap, hash, 32)) {
+			LOGERR("Failed to hex2bin hash in gbt_witness_data");
+			return;
+		}
+		bswap_256(hashbin + 32 + 32 * i, binswap);
+	}
+
+	// Build merkle root (copied from libblkmaker)
+	for (txncount++ ; txncount > 1 ; txncount /= 2) {
+		if (txncount % 2) {
+			// Odd number, duplicate the last
+			memcpy(hashbin + 32 * txncount, hashbin + 32 * (txncount - 1), 32);
+			txncount++;
+		}
+		for (i = 0; i < txncount; i += 2) {
+			// We overlap input and output here, on the first pair
+			gen_hash(hashbin + 32 * i, hashbin + 32 * (i / 2), 64);
+		}
+	}
+
+	memcpy(hashbin + 32, &witness_nonce, witness_nonce_size);
+	gen_hash(hashbin, hashbin + witness_header_size, 32 + witness_nonce_size);
+	memcpy(hashbin, witness_header, witness_header_size);
+	__bin2hex(wb->witnessdata, hashbin, 32 + witness_header_size);
+	wb->insert_witness = true;
 }
-
-bool miningEmptyBlock = false; 
-
-/* This function assumes it will only receive a valid json gbt base template
- * since checking should have been done earlier, and creates the base template
- * for generating work templates. */
-static void do_empty_update(ckpool_t* ckp)
-{
-  //struct update_req *ur = (struct update_req *)arg;
-  //int prio = ur->prio;
-  int retries = 0;
-  sdata_t *sdata = ckp->sdata;
-  json_t *val; //*txn_array;
-  bool new_block = false;
-  bool ret = false;
-  workbase_t *wb;
-  time_t now_t;
-  char *buf;
-    
-retry:
-  //buf = send_recv_generator(ckp, "getbase", prio);
-  buf = grab_empty_block();
-    
-  if (unlikely(!buf)) {
-    LOGNOTICE("Get base in update_base delayed due to higher priority request");
-    goto out;
-  }
-  if (unlikely(retries))
-    LOGWARNING("Generator succeeded in update_base after retrying");
-
-  wb = ckzalloc(sizeof(workbase_t));
-  wb->ckp = ckp;
-  json_error_t error;
-  val = json_loads(buf, 0, &error);
-  if(!json_is_object(val))
-    {
-      LOGWARNING("Bad empty block format, error: on line %d: %s", error.line, error.text);
-      return;
-    }
-  json_intcpy(&wb->height, val, "height");
-  json_uint64cpy(&wb->coinbasevalue, val, "coinbasevalue");
-  //txn_array = json_object_get(val, "transactions");
-  //wb_merkle_bins(ckp, sdata, wb, txn_array);
-  json_uintcpy(&wb->version, val, "version");
-  json_uintcpy(&wb->curtime, val, "curtime");
-  json_strcpy(wb->prevhash, val, "previousblockhash");
-  // hash comes in backwards compared to what ckpool wants
-  char bin[32], swap[32];
-  hex2bin(bin, wb->prevhash, 32);
-  swap_256(swap, bin);
-  __bin2hex(wb->prevhash, swap, 32);
-
-  json_strcpy(wb->nbit, val, "bits");
-  json_strcpy(wb->ntime, val, "mintime");
-  sscanf(wb->ntime, "%x", &wb->ntime32);
-  wb->flags = strdup("");  // TODO; coinbase string
-
-  //json_strcpy(wb->target, val, "target");
-  //json_dblcpy(&wb->diff, val, "diff");
-  //json_strcpy(wb->bbversion, val, "bbversion");
-
-  //json_strdup(&wb->flags, val, "flags");
-  wb_merkle_bins(ckp,sdata,wb,NULL);
-    
-  json_decref(val);
-  generate_coinbase(ckp, wb);
-
-  add_base(ckp, sdata, wb, &new_block);
-  /* Reset the update time to avoid stacked low priority notifies. Bring
-   * forward the next notify in case of a new block. */
-  now_t = time(NULL);
-  if (new_block)
-    now_t -= ckp->update_interval / 2;
-  sdata->update_time = now_t;
-
-  if (wb->height > curBlockHeight)  // I only want to mine an empty block if I'm mining an lower height
-    {
-      if (new_block)
-	LOGNOTICE("Block hash changed to empty block %s", sdata->lastswaphash);
-      miningEmptyBlock=true;
-      stratum_broadcast_update(sdata, wb, new_block);
-      ret = true;
-      LOGINFO("Broadcast updated stratum base to empty block");
-    }
-out:
-  cksem_post(&sdata->update_sem);
-
-  /* Send a ping to miners if we fail to get a base to keep them
-   * connected while bitcoind recovers(?) */
-  if (unlikely(!ret)) {
-    LOGINFO("Broadcast ping due to failed stratum base update");
-    broadcast_ping(sdata);
-  }
-  dealloc(buf);
-out_free:
-  return;
-}
-
-/* Monitors the empty block file for new empty blocks and starts mining on them if one appears */
-#define EVT_BUF_LEN (sizeof(struct inotify_event)*10)
-static void *emptymonitor(void *arg)
-{
-  ckpool_t *ckp = (ckpool_t *)arg;
-  sdata_t *sdata = ckp->sdata;
-  char evtdata[EVT_BUF_LEN];
-
-  pthread_detach(pthread_self());
-  rename_proc("emptymonitor");
-
-  int inot = inotify_init();
-  int watchDesc = -1;
-  assert(inot >= 0);
-
-  int count=0;
-  do
-    {
-    watchDesc = inotify_add_watch(inot,EMPTY_BLOCK_FILE, IN_MODIFY | IN_DELETE_SELF);
-    if (watchDesc < 0) 
-      {
-      usleep(250000);
-      if ((count&63)==0) LOGWARNING(EMPTY_BLOCK_FILE " does not exist.  Headers-only mining unavailable.");
-      }
-    count++;
-    } while(watchDesc < 0);  // loop until the file exists          
-
-  int done = 0;
-  count = 0;
-  while (!done)
-    {
-
-    int length = read(inot,evtdata,EVT_BUF_LEN);
-    if (length)  /* I don't actually care what the event was... just read the file on any event */
-      {
-      struct inotify_event *event = ( struct inotify_event * ) &evtdata;
-      if (1)  // event->len ) 
-        {
-        if ( event->mask & IN_MODIFY ) 
-          {
-          do_empty_update(ckp);
-          }
-        else if ( event->mask & IN_DELETE_SELF ) 
-          {
-          LOGWARNING(EMPTY_BLOCK_FILE " was deleted");
-          //printf( "File deleted.\n");
-          inotify_rm_watch(inot, watchDesc);  // in case file is deleted we remove the watch and try to add it again
-	  do
-	    {
-            watchDesc = inotify_add_watch(inot,EMPTY_BLOCK_FILE, IN_MODIFY | IN_DELETE_SELF);
-            if (watchDesc < 0) 
-              {
-              usleep(250000);
-              //printf(EMPTY_BLOCK_FILE " does not exist\n");
-              }
-            } while(watchDesc < 0);  // loop until the file exists          
-          }
-        else
-          {
-          usleep(250000);
-          //printf("Unknown event");
-          }
-        }
-      }
-    }
-
-
-
-#if 0
-  int watchDesc = inotify_add_watch(inot,EMPTY_BLOCK_FILE, IN_CREATE | IN_MODIFY);
-
-  while (42)
-    {
-    int length = read(inot,evtdata,EVT_BUF_LEN);
-    if (length)  /* I don't actually care what the event was... just read the file on any event */
-      {
-      do_empty_update(ckp);
-      }
-    }
-#endif
-
-  inotify_rm_watch(inot, watchDesc);
-  close(inot);
-}
-
 
 /* This function assumes it will only receive a valid json gbt base template
  * since checking should have been done earlier, and creates the base template
@@ -1585,10 +1446,11 @@ static void *emptymonitor(void *arg)
 static void *do_update(void *arg)
 {
 	struct update_req *ur = (struct update_req *)arg;
-	int prio = ur->prio, retries = 0;
+	json_t *val, *txn_array, *rules_array;
+	const char* witnessdata_check, *rule;
+	int i, prio = ur->prio, retries = 0;
 	ckpool_t *ckp = ur->ckp;
 	sdata_t *sdata = ckp->sdata;
-	json_t *val, *txn_array;
 	bool new_block = false;
 	bool ret = false;
 	workbase_t *wb;
@@ -1643,6 +1505,31 @@ retry:
 	json_strdup(&wb->flags, val, "flags");
 	txn_array = json_object_get(val, "transactions");
 	wb_merkle_bins(ckp, sdata, wb, txn_array);
+
+	wb->insert_witness = false;
+	memset(wb->witnessdata, 0, sizeof(wb->witnessdata));
+	rules_array = json_object_get(val, "rules");
+
+	if (rules_array) {
+		int rule_count = json_array_size(rules_array);
+
+		for (i = 0; i < rule_count; i++) {
+			rule = json_string_value(json_array_get(rules_array, i));
+			if (!rule)
+				continue;
+			if (*rule == '!')
+				rule++;
+			if (safecmp(rule, "segwit")) {
+				witnessdata_check = json_string_value(json_object_get(val, "default_witness_commitment"));
+				gbt_witness_data(wb, txn_array);
+				// Verify against the pre-calculated value if it exists. Skip the size/OP_RETURN bytes.
+				if (wb->insert_witness && witnessdata_check[0] && safecmp(witnessdata_check + 4, wb->witnessdata) != 0)
+					LOGERR("Witness from btcd: %s. Calculated Witness: %s", witnessdata_check + 4, wb->witnessdata);
+				break;
+			}
+		}
+	}
+
 	json_decref(val);
 	generate_coinbase(ckp, wb);
 
@@ -2261,19 +2148,25 @@ static int64_t prio_sort(proxy_t *a, proxy_t *b)
 	return (a->priority - b->priority);
 }
 
+/* Masked increment */
+static int64_t masked_inc(int64_t value, int64_t mask)
+{
+	value &= ~mask;
+	value++;
+	value |= mask;
+	return value;
+}
+
 /* Priority values can be sparse, they do not need to be sequential */
 static void __set_proxy_prio(sdata_t *sdata, proxy_t *proxy, int64_t priority)
 {
 	proxy_t *tmpa, *tmpb, *exists = NULL;
-	int64_t next_prio = 0;
+	int64_t mask, next_prio = 0;
 
 	/* Encode the userid as the high bits in priority */
-	if (!proxy->global) {
-		int64_t high_bits = proxy->userid;
-
-		high_bits <<= 32;
-		priority |= high_bits;
-	}
+	mask = proxy->userid;
+	mask <<= 32;
+	priority |= mask;
 
 	/* See if the priority is already in use */
 	HASH_ITER(hh, sdata->proxies, tmpa, tmpb) {
@@ -2281,7 +2174,7 @@ static void __set_proxy_prio(sdata_t *sdata, proxy_t *proxy, int64_t priority)
 			break;
 		if (tmpa->priority == priority) {
 			exists = tmpa;
-			next_prio = exists->priority + 1;
+			next_prio = masked_inc(priority, mask);
 			break;
 		}
 	}
@@ -2289,7 +2182,7 @@ static void __set_proxy_prio(sdata_t *sdata, proxy_t *proxy, int64_t priority)
 	HASH_ITER(hh, exists, tmpa, tmpb) {
 		if (tmpa->priority > next_prio)
 			break;
-		tmpa->priority++;
+		tmpa->priority = masked_inc(tmpa->priority, mask);
 		next_prio++;
 	}
 	proxy->priority = priority;
@@ -2405,11 +2298,16 @@ static proxy_t *existing_subproxy(sdata_t *sdata, const int id, const int subid)
 	return subproxy;
 }
 
+static void check_userproxies(sdata_t *sdata, proxy_t *proxy, const int userid);
+
 static void set_proxy_prio(sdata_t *sdata, proxy_t *proxy, const int priority)
 {
 	mutex_lock(&sdata->proxy_lock);
 	__set_proxy_prio(sdata, proxy, priority);
 	mutex_unlock(&sdata->proxy_lock);
+
+	if (!proxy->global)
+		check_userproxies(sdata, proxy, proxy->userid);
 }
 
 /* Set proxy to the current proxy and calculate how much headroom it has */
@@ -2470,7 +2368,7 @@ static void generator_recruit(const ckpool_t *ckp, const int proxyid, const int 
 /* Find how much headroom we have and connect up to that many clients that are
  * not currently on this pool, recruiting more slots to switch more clients
  * later on lazily. Only reconnect clients bound to global proxies. */
-static void reconnect_clients(sdata_t *sdata)
+static void reconnect_global_clients(sdata_t *sdata)
 {
 	stratum_instance_t *client, *tmpclient;
 	int reconnects = 0;
@@ -2552,7 +2450,33 @@ static void check_bestproxy(sdata_t *sdata)
 		LOGNOTICE("Stratifier setting active proxy to %d", changed_id);
 }
 
-static void dead_proxyid(sdata_t *sdata, const int id, const int subid, const bool replaced)
+static proxy_t *best_proxy(sdata_t *sdata)
+{
+	proxy_t *proxy;
+
+	mutex_lock(&sdata->proxy_lock);
+	proxy = sdata->proxy;
+	mutex_unlock(&sdata->proxy_lock);
+
+	return proxy;
+}
+
+static void check_globalproxies(sdata_t *sdata, proxy_t *proxy)
+{
+	check_bestproxy(sdata);
+	if (proxy->parent == best_proxy(sdata)->parent)
+		reconnect_global_clients(sdata);
+}
+
+static void check_proxy(sdata_t *sdata, proxy_t *proxy)
+{
+	if (proxy->global)
+		check_globalproxies(sdata, proxy);
+	else
+		check_userproxies(sdata, proxy, proxy->userid);
+}
+
+static void dead_proxyid(sdata_t *sdata, const int id, const int subid, const bool replaced, const bool deleted)
 {
 	stratum_instance_t *client, *tmp;
 	int reconnects = 0, proxyid = 0;
@@ -2562,6 +2486,8 @@ static void dead_proxyid(sdata_t *sdata, const int id, const int subid, const bo
 	proxy = existing_subproxy(sdata, id, subid);
 	if (proxy) {
 		proxy->dead = true;
+		proxy->deleted = deleted;
+		set_proxy_prio(sdata, proxy, 0xFFFF);
 		if (!replaced && proxy->global)
 			check_bestproxy(sdata);
 	}
@@ -2643,7 +2569,7 @@ static void update_subscribe(ckpool_t *ckp, const char *cmd)
 	/* Is this a replacement for an existing proxy id? */
 	old = existing_subproxy(sdata, id, subid);
 	if (old) {
-		dead_proxyid(sdata, id, subid, true);
+		dead_proxyid(sdata, id, subid, true, false);
 		proxy = old;
 		proxy->dead = false;
 	} else
@@ -2695,6 +2621,8 @@ static void update_subscribe(ckpool_t *ckp, const char *cmd)
 		LOGWARNING("Only able to set nonce2len %d of requested %d on proxy %d:%d",
 			   proxy->enonce2varlen, ckp->nonce2length, id, subid);
 	json_decref(val);
+
+	check_proxy(sdata, proxy);
 }
 
 /* Find the highest priority alive proxy belonging to userid and recruit extra
@@ -2723,7 +2651,7 @@ static void recruit_best_userproxy(sdata_t *sdata, const int userid, const int r
 
 /* Check how much headroom the userid proxies have and reconnect any clients
  * that are not bound to it that should be */
-static void check_userproxies(sdata_t *sdata, const int userid)
+static void check_userproxies(sdata_t *sdata, proxy_t *proxy, const int userid)
 {
 	int64_t headroom = proxy_headroom(sdata, userid);
 	stratum_instance_t *client, *tmpclient;
@@ -2737,8 +2665,10 @@ static void check_userproxies(sdata_t *sdata, const int userid)
 			continue;
 		if (client->user_id != userid)
 			continue;
-		/* Is this client bound to a dead proxy? */
-		if (!client->reconnect && client->proxy->userid == userid)
+		/* Is the client already bound to a proxy of its own userid of
+		 * a higher priority than this one. */
+		if (client->proxy->userid == userid &&
+		    client->proxy->parent->priority <= proxy->parent->priority)
 			continue;
 		if (headroom-- < 1)
 			continue;
@@ -2753,17 +2683,6 @@ static void check_userproxies(sdata_t *sdata, const int userid)
 	}
 	if (headroom < 0)
 		recruit_best_userproxy(sdata, userid, -headroom);
-}
-
-static proxy_t *best_proxy(sdata_t *sdata)
-{
-	proxy_t *proxy;
-
-	mutex_lock(&sdata->proxy_lock);
-	proxy = sdata->proxy;
-	mutex_unlock(&sdata->proxy_lock);
-
-	return proxy;
 }
 
 static void update_notify(ckpool_t *ckp, const char *cmd)
@@ -2855,12 +2774,7 @@ static void update_notify(ckpool_t *ckp, const char *cmd)
 			LOGNOTICE("Block hash on proxy %d changed to %s", id, dsdata->lastswaphash);
 	}
 
-	if (proxy->global) {
-		check_bestproxy(sdata);
-		if (proxy->parent == best_proxy(sdata)->parent)
-			reconnect_clients(sdata);
-	} else
-		check_userproxies(sdata, proxy->userid);
+	check_proxy(sdata, proxy);
 	clean |= new_block;
 	LOGINFO("Proxy %d:%d broadcast updated stratum notify with%s clean", id,
 		subid, clean ? "" : "out");
@@ -2997,6 +2911,11 @@ static void reap_proxies(ckpool_t *ckp, sdata_t *sdata)
 			proxy->subproxy_count--;
 			free_proxy(subproxy);
 		}
+		/* Should we reap the parent proxy too?*/
+		if (!proxy->deleted || proxy->subproxy_count > 1 || proxy->bound_clients)
+			continue;
+		HASH_DELETE(hh, sdata->proxies, proxy);
+		free_proxy(proxy);
 	}
 	mutex_unlock(&sdata->proxy_lock);
 
@@ -3022,7 +2941,7 @@ static void __inc_instance_ref(stratum_instance_t *client)
 /* Find an __instance_by_id and increase its reference count allowing us to
  * use this instance outside of instance_lock without fear of it being
  * dereferenced. Does not return dropped clients still on the list. */
-static stratum_instance_t *ref_instance_by_id(sdata_t *sdata, const int64_t id)
+static inline stratum_instance_t *ref_instance_by_id(sdata_t *sdata, const int64_t id)
 {
 	stratum_instance_t *client;
 
@@ -3065,6 +2984,11 @@ static void __drop_client(sdata_t *sdata, stratum_instance_t *client, bool lazil
 	__kill_instance(sdata, client);
 }
 
+static int __dec_instance_ref(stratum_instance_t *client)
+{
+	return --client->ref;
+}
+
 /* Decrease the reference count of instance. */
 static void _dec_instance_ref(sdata_t *sdata, stratum_instance_t *client, const char *file,
 			      const char *func, const int line)
@@ -3075,7 +2999,7 @@ static void _dec_instance_ref(sdata_t *sdata, stratum_instance_t *client, const 
 	int ref;
 
 	ck_wlock(&sdata->instance_lock);
-	ref = --client->ref;
+	ref = __dec_instance_ref(client);
 	/* See if there are any instances that were dropped that could not be
 	 * moved due to holding a reference and drop them now. */
 	if (unlikely(client->dropped && !ref)) {
@@ -3684,12 +3608,22 @@ static void reconnect_client(sdata_t *sdata, stratum_instance_t *client)
 	stratum_add_send(sdata, json_msg, client->id, SM_RECONNECT);
 }
 
-static void dead_proxy(sdata_t *sdata, const char *buf)
+static void dead_proxy(ckpool_t *ckp, sdata_t *sdata, const char *buf)
 {
 	int id = 0, subid = 0;
 
 	sscanf(buf, "deadproxy=%d:%d", &id, &subid);
-	dead_proxyid(sdata, id, subid, false);
+	dead_proxyid(sdata, id, subid, false, false);
+	reap_proxies(ckp, sdata);
+}
+
+static void del_proxy(ckpool_t *ckp, sdata_t *sdata, const char *buf)
+{
+	int id = 0, subid = 0;
+
+	sscanf(buf, "delproxy=%d:%d", &id, &subid);
+	dead_proxyid(sdata, id, subid, false, true);
+	reap_proxies(ckp, sdata);
 }
 
 static void reconnect_client_id(sdata_t *sdata, const int64_t client_id)
@@ -4384,7 +4318,9 @@ retry:
 	} else if (cmdmatch(buf, "reconnect")) {
 		request_reconnect(sdata, buf);
 	} else if (cmdmatch(buf, "deadproxy")) {
-		dead_proxy(sdata, buf);
+		dead_proxy(ckp, sdata, buf);
+	} else if (cmdmatch(buf, "delproxy")) {
+		del_proxy(ckp, sdata, buf);
 	} else if (cmdmatch(buf, "loglevel")) {
 		sscanf(buf, "loglevel=%d", &ckp->loglevel);
 	} else if (cmdmatch(buf, "ckdbflush")) {
@@ -4518,19 +4454,16 @@ static proxy_t *__best_subproxy(proxy_t *proxy)
  * running out of room. */
 static sdata_t *select_sdata(const ckpool_t *ckp, sdata_t *ckp_sdata, const int userid)
 {
-	proxy_t *current, *proxy, *tmp, *best = NULL;
+	proxy_t *global, *proxy, *tmp, *best = NULL;
 
 	if (!ckp->proxy || ckp->passthrough)
 		return ckp_sdata;
-	current = ckp_sdata->proxy;
-	if (!current) {
-		LOGWARNING("No proxy available yet to generate subscribes");
-		return NULL;
-	}
 
 	/* Proxies are ordered by priority so first available will be the best
 	 * priority */
 	mutex_lock(&ckp_sdata->proxy_lock);
+	best = global = ckp_sdata->proxy;
+
 	HASH_ITER(hh, ckp_sdata->proxies, proxy, tmp) {
 		if (proxy->userid < userid)
 			continue;
@@ -4544,12 +4477,14 @@ static sdata_t *select_sdata(const ckpool_t *ckp, sdata_t *ckp_sdata, const int 
 
 	if (!best) {
 		if (!userid)
-			LOGWARNING("Temporarily insufficient subproxies to accept more clients");
+			LOGWARNING("Temporarily insufficient proxies to accept more clients");
+		else
+			LOGNOTICE("Temporarily insufficient proxies for userid %d to accept more clients", userid);
 		return NULL;
 	}
 	if (!userid) {
-		if (best->id != current->id || current_headroom(ckp_sdata, &proxy) < 2)
-			generator_recruit(ckp, current->id, 1);
+		if (best->id != global->id || current_headroom(ckp_sdata, &proxy) < 2)
+			generator_recruit(ckp, global->id, 1);
 	} else {
 		if (proxy_headroom(ckp_sdata, userid) < 2)
 			generator_recruit(ckp, best->id, 1);
@@ -5126,6 +5061,8 @@ static void parse_worker_diffs(ckpool_t *ckp, json_t *worker_array)
 		json_get_string(&workername, worker_entry, "workername");
 		json_get_int(&mindiff, worker_entry, "difficultydefault");
 		set_worker_mindiff(ckp, workername, mindiff);
+                free(workername);
+                workername = NULL;
 	}
 }
 
@@ -5759,7 +5696,7 @@ static json_t *parse_submit(stratum_instance_t *client, json_t *json_msg,
 		*err_val = JSON_ERR(err);
 		goto out;
 	}
-	if (unlikely(json_array_size(params_val) != 5)) {
+	if (unlikely(json_array_size(params_val) < 5)) {
 		err = SE_INVALID_SIZE;
 		*err_val = JSON_ERR(err);
 		goto out;
@@ -6126,8 +6063,10 @@ static void suggest_diff(ckpool_t *ckp, stratum_instance_t *client, const char *
 }
 
 /* Send diff first when sending the first stratum template after subscribing */
-static void init_client(sdata_t *sdata, const stratum_instance_t *client, const int64_t client_id)
+static void init_client(const stratum_instance_t *client, const int64_t client_id)
 {
+	sdata_t *sdata = client->sdata;
+
 	stratum_send_diff(sdata, client);
 	stratum_send_update(sdata, client_id, true);
 }
@@ -6244,7 +6183,7 @@ static void parse_method(ckpool_t *ckp, sdata_t *sdata, stratum_instance_t *clie
 		json_object_set_new_nocheck(val, "error", json_null());
 		stratum_add_send(sdata, val, client_id, SM_SUBSCRIBERESULT);
 		if (likely(client->subscribed))
-			init_client(sdata, client, client_id);
+			init_client(client, client_id);
 		return;
 	}
 
@@ -6631,7 +6570,20 @@ out:
 	free(buf);
 }
 
-static void add_node_txns(sdata_t *sdata, const json_t *val)
+/* Submit the transactions in node mode so the local btcd has all the
+ * transactions that will go into the next blocksolve. */
+static void submit_transaction(ckpool_t *ckp, const char *hash)
+{
+	char *buf;
+
+	if (unlikely(!ckp->generator_ready))
+		return;
+	ASPRINTF(&buf, "submittxn:%s", hash);
+	send_generator(ckp, buf, GEN_LAX);
+	free(buf);
+}
+
+static void add_node_txns(ckpool_t *ckp, sdata_t *sdata, const json_t *val)
 {
 	json_t *txn_array, *txn_val, *data_val, *hash_val;
 	txntable_t *txn;
@@ -6659,6 +6611,7 @@ static void add_node_txns(sdata_t *sdata, const json_t *val)
 			txn->refcount = 100;
 			continue;
 		}
+		submit_transaction(ckp, data);
 		txn = ckzalloc(sizeof(txntable_t));
 		memcpy(txn->hash, hash, 65);
 		txn->data = strdup(data);
@@ -6744,7 +6697,7 @@ static void parse_node_msg(ckpool_t *ckp, sdata_t *sdata, json_t *val)
 	LOGDEBUG("Got node method %d:%s", msg_type, stratum_msgs[msg_type]);
 	switch (msg_type) {
 		case SM_TRANSACTIONS:
-			add_node_txns(sdata, val);
+			add_node_txns(ckp, sdata, val);
 			break;
 		case SM_WORKINFO:
 			add_node_base(ckp, val);
@@ -6825,11 +6778,12 @@ static void srecv_process(ckpool_t *ckp, json_t *val)
 	msg->json_msg = val;
 	val = json_object_get(msg->json_msg, "client_id");
 	if (unlikely(!val)) {
-		buf = json_dumps(val, JSON_COMPACT);
 		if (ckp->node)
 			parse_node_msg(ckp, sdata, msg->json_msg);
-		else
+		else {
+			buf = json_dumps(val, JSON_COMPACT);
 			LOGWARNING("Failed to extract client_id from connector json smsg %s", buf);
+		}
 		goto out;
 	}
 
@@ -7363,6 +7317,35 @@ static void upstream_workers(ckpool_t *ckp, user_instance_t *user)
 	send_proc(ckp->connector, buf);
 }
 
+
+/* To iterate over all users, if user is initially NULL, this will return the first entry,
+ * otherwise it will return the entry after user, and NULL if there are no more entries.
+ * Allows us to grab and drop the lock on each iteration. */
+static user_instance_t *next_user(sdata_t *sdata, user_instance_t *user)
+{
+	ck_rlock(&sdata->instance_lock);
+	if (unlikely(!user))
+		user = sdata->user_instances;
+	else
+		user = user->hh.next;
+	ck_runlock(&sdata->instance_lock);
+
+	return user;
+}
+
+/* Ditto for worker */
+static worker_instance_t *next_worker(sdata_t *sdata, user_instance_t *user, worker_instance_t *worker)
+{
+	ck_rlock(&sdata->instance_lock);
+	if (!worker)
+		worker = user->worker_instances;
+	else
+		worker = worker->next;
+	ck_runlock(&sdata->instance_lock);
+
+	return worker;
+}
+
 static void *statsupdate(void *arg)
 {
 	ckpool_t *ckp = (ckpool_t *)arg;
@@ -7380,10 +7363,10 @@ static void *statsupdate(void *arg)
 		double ghs, ghs1, ghs5, ghs15, ghs60, ghs360, ghs1440, ghs10080, per_tdiff;
 		char suffix1[16], suffix5[16], suffix15[16], suffix60[16], cdfield[64];
 		char suffix360[16], suffix1440[16], suffix10080[16];
-		stratum_instance_t *client, *tmp;
 		log_entry_t *log_entries = NULL;
-		user_instance_t *user, *tmpuser;
 		char_entry_t *char_list = NULL;
+		stratum_instance_t *client;
+		user_instance_t *user;
 		int idle_workers = 0;
 		char *fname, *s, *sp;
 		tv_t now, diff;
@@ -7395,53 +7378,69 @@ static void *statsupdate(void *arg)
 		tv_time(&now);
 		timersub(&now, &stats->start_time, &diff);
 
-		/* Use this locking as an opportunity to test clients. */
-		ck_rlock(&sdata->instance_lock);
-		HASH_ITER(hh, sdata->stratum_instances, client, tmp) {
+		ck_wlock(&sdata->instance_lock);
+		/* Grab the first entry */
+		client = sdata->stratum_instances;
+		if (likely(client))
+			__inc_instance_ref(client);
+		ck_wunlock(&sdata->instance_lock);
+
+		while (client) {
+			tv_time(&now);
 			/* Look for clients that may have been dropped which the
 			 * stratifier has not been informed about and ask the
 			 * connector if they still exist */
-			if (client->dropped) {
+			if (client->dropped)
 				connector_test_client(ckp, client->id);
-				continue;
-			}
-
-			if (client->node || client->remote)
-				continue;
-
-			/* Test for clients that haven't authed in over a minute
-			 * and drop them lazily */
-			if (!client->authorised) {
+			else if (client->node || client->remote) {
+				/* Do nothing to these */
+			} else if (!client->authorised) {
+				/* Test for clients that haven't authed in over a minute
+				 * and drop them lazily */
 				if (now.tv_sec > client->start_time + 60) {
 					client->dropped = true;
 					connector_drop_client(ckp, client->id);
 				}
-				continue;
+			} else {
+				per_tdiff = tvdiff(&now, &client->last_share);
+				/* Decay times per connected instance */
+				if (per_tdiff > 60) {
+					/* No shares for over a minute, decay to 0 */
+					decay_client(client, 0, &now);
+					idle_workers++;
+					if (per_tdiff > 600)
+						client->idle = true;
+					/* Test idle clients are still connected */
+					connector_test_client(ckp, client->id);
+				}
 			}
 
-			per_tdiff = tvdiff(&now, &client->last_share);
-			/* Decay times per connected instance */
-			if (per_tdiff > 60) {
-				/* No shares for over a minute, decay to 0 */
-				decay_client(client, 0, &now);
-				idle_workers++;
-				if (per_tdiff > 600)
-					client->idle = true;
-				/* Test idle clients are still connected */
-				connector_test_client(ckp, client->id);
-				continue;
-			}
+			ck_wlock(&sdata->instance_lock);
+			/* Drop the reference of the last entry we examined,
+			 * then grab the next client. */
+			__dec_instance_ref(client);
+			client = client->hh.next;
+			/* Grab a reference to this client allowing us to examine
+			 * it without holding the lock */
+			if (likely(client))
+				__inc_instance_ref(client);
+			ck_wunlock(&sdata->instance_lock);
 		}
 
-		HASH_ITER(hh, sdata->user_instances, user, tmpuser) {
+		user = NULL;
+
+		while ((user = next_user(sdata, user)) != NULL) {
 			worker_instance_t *worker;
 			bool idle = false;
 
 			if (!user->authorised)
 				continue;
 
+			worker = NULL;
+			tv_time(&now);
+
 			/* Decay times per worker */
-			DL_FOREACH(user->worker_instances, worker) {
+			while ((worker = next_worker(sdata, user, worker)) != NULL) {
 				per_tdiff = tvdiff(&now, &worker->last_share);
 				if (per_tdiff > 60) {
 					decay_worker(worker, 0, &now);
@@ -7531,7 +7530,6 @@ static void *statsupdate(void *arg)
 			if (ckp->remote)
 				upstream_workers(ckp, user);
 		}
-		ck_runlock(&sdata->instance_lock);
 
 		/* Dump log entries out of instance_lock */
 		dump_log_entries(&log_entries);
@@ -7929,7 +7927,7 @@ void *stratifier(void *arg)
 	mutex_init(&sdata->block_lock);
 
 	LOGWARNING("%s stratifier ready", ckp->name);
-        if (!ckp->proxy) create_pthread(&pth_emptymonitor, emptymonitor,ckp);
+        if (!ckp->proxy) create_pthread(&pth_emptymonitor, spyMiningMonitor,ckp);
 	stratum_loop(ckp, pi);
 out:
 	/* We should never get here unless there's a fatal error */
@@ -7937,3 +7935,212 @@ out:
 	exit(1);
 	return NULL;
 }
+
+
+// ---- stratum mining ----
+
+#define EMPTY_BLOCK_FILE "/tmp/emptyblock.json"
+
+uint64_t curBlockHeight=0;
+bool miningEmptyBlock = false; 
+
+static char* grab_empty_block()
+{
+    FILE* fp;
+    fp = fopen(EMPTY_BLOCK_FILE,"r");
+    if (fp)
+    {
+      char* ret = (char*) malloc(8000);
+      int amt = fread(ret,sizeof(char),8000,fp);    
+      fclose(fp);
+      if (amt)
+      {
+        ret[amt]=0;
+        truncate(EMPTY_BLOCK_FILE,0);        
+        return ret;
+      }
+      free(ret);
+    }
+    return NULL;
+}
+
+/* This function assumes it will only receive a valid json gbt base template
+ * since checking should have been done earlier, and creates the base template
+ * for generating work templates. */
+static void do_empty_update(ckpool_t* ckp)
+{
+  //struct update_req *ur = (struct update_req *)arg;
+  //int prio = ur->prio;
+  int retries = 0;
+  sdata_t *sdata = ckp->sdata;
+  json_t *val; //*txn_array;
+  bool new_block = false;
+  bool ret = false;
+  workbase_t *wb;
+  time_t now_t;
+  char *buf;
+    
+retry:
+  //buf = send_recv_generator(ckp, "getbase", prio);
+  buf = grab_empty_block();
+    
+  if (unlikely(!buf)) {
+    LOGNOTICE("Get base in update_base delayed due to higher priority request");
+    goto out;
+  }
+  if (unlikely(retries))
+    LOGWARNING("Generator succeeded in update_base after retrying");
+
+  wb = ckzalloc(sizeof(workbase_t));
+  wb->ckp = ckp;
+  json_error_t error;
+  val = json_loads(buf, 0, &error);
+  if(!json_is_object(val))
+    {
+      LOGWARNING("Bad empty block format, error: on line %d: %s", error.line, error.text);
+      return;
+    }
+  json_intcpy(&wb->height, val, "height");
+  json_uint64cpy(&wb->coinbasevalue, val, "coinbasevalue");
+  //txn_array = json_object_get(val, "transactions");
+  //wb_merkle_bins(ckp, sdata, wb, txn_array);
+  json_uintcpy(&wb->version, val, "version");
+  json_uintcpy(&wb->curtime, val, "curtime");
+  json_strcpy(wb->prevhash, val, "previousblockhash");
+  // hash comes in backwards compared to what ckpool wants
+  char bin[32], swap[32];
+  hex2bin(bin, wb->prevhash, 32);
+  swap_256(swap, bin);
+  __bin2hex(wb->prevhash, swap, 32);
+
+  json_strcpy(wb->nbit, val, "bits");
+  json_strcpy(wb->ntime, val, "mintime");
+  sscanf(wb->ntime, "%x", &wb->ntime32);
+  wb->flags = strdup("");  // TODO; coinbase string
+
+  //json_strcpy(wb->target, val, "target");
+  //json_dblcpy(&wb->diff, val, "diff");
+  //json_strcpy(wb->bbversion, val, "bbversion");
+
+  //json_strdup(&wb->flags, val, "flags");
+  wb_merkle_bins(ckp,sdata,wb,NULL);
+    
+  json_decref(val);
+  generate_coinbase(ckp, wb);
+
+  add_base(ckp, sdata, wb, &new_block);
+  /* Reset the update time to avoid stacked low priority notifies. Bring
+   * forward the next notify in case of a new block. */
+  now_t = time(NULL);
+  if (new_block)
+    now_t -= ckp->update_interval / 2;
+  sdata->update_time = now_t;
+
+  if (wb->height > curBlockHeight)  // I only want to mine an empty block if I'm mining an lower height
+    {
+      if (new_block)
+	LOGNOTICE("Block hash changed to empty block %s", sdata->lastswaphash);
+      miningEmptyBlock=true;
+      stratum_broadcast_update(sdata, wb, new_block);
+      ret = true;
+      LOGINFO("Broadcast updated stratum base to empty block");
+    }
+out:
+  cksem_post(&sdata->update_sem);
+
+  /* Send a ping to miners if we fail to get a base to keep them
+   * connected while bitcoind recovers(?) */
+  if (unlikely(!ret)) {
+    LOGINFO("Broadcast ping due to failed stratum base update");
+    broadcast_ping(sdata);
+  }
+  dealloc(buf);
+out_free:
+  return;
+}
+
+/* Monitors the empty block file for new empty blocks and starts mining on them if one appears */
+#define EVT_BUF_LEN (sizeof(struct inotify_event)*10)
+void *spyMiningMonitor(void *arg)
+{
+  ckpool_t *ckp = (ckpool_t *)arg;
+  sdata_t *sdata = ckp->sdata;
+  char evtdata[EVT_BUF_LEN];
+
+  pthread_detach(pthread_self());
+  rename_proc("emptymonitor");
+
+  int inot = inotify_init();
+  int watchDesc = -1;
+  assert(inot >= 0);
+
+  int count=0;
+  do
+    {
+    watchDesc = inotify_add_watch(inot,EMPTY_BLOCK_FILE, IN_MODIFY | IN_DELETE_SELF);
+    if (watchDesc < 0) 
+      {
+      usleep(250000);
+      if ((count&63)==0) LOGWARNING(EMPTY_BLOCK_FILE " does not exist.  Headers-only mining unavailable.");
+      }
+    count++;
+    } while(watchDesc < 0);  // loop until the file exists          
+
+  int done = 0;
+  count = 0;
+  while (!done)
+    {
+
+    int length = read(inot,evtdata,EVT_BUF_LEN);
+    if (length)  /* I don't actually care what the event was... just read the file on any event */
+      {
+      struct inotify_event *event = ( struct inotify_event * ) &evtdata;
+      if (1)  // event->len ) 
+        {
+        if ( event->mask & IN_MODIFY ) 
+          {
+          do_empty_update(ckp);
+          }
+        else if ( event->mask & IN_DELETE_SELF ) 
+          {
+          LOGWARNING(EMPTY_BLOCK_FILE " was deleted");
+          //printf( "File deleted.\n");
+          inotify_rm_watch(inot, watchDesc);  // in case file is deleted we remove the watch and try to add it again
+	  do
+	    {
+            watchDesc = inotify_add_watch(inot,EMPTY_BLOCK_FILE, IN_MODIFY | IN_DELETE_SELF);
+            if (watchDesc < 0) 
+              {
+              usleep(250000);
+              //printf(EMPTY_BLOCK_FILE " does not exist\n");
+              }
+            } while(watchDesc < 0);  // loop until the file exists          
+          }
+        else
+          {
+          usleep(250000);
+          //printf("Unknown event");
+          }
+        }
+      }
+    }
+
+
+
+#if 0
+  int watchDesc = inotify_add_watch(inot,EMPTY_BLOCK_FILE, IN_CREATE | IN_MODIFY);
+
+  while (42)
+    {
+    int length = read(inot,evtdata,EVT_BUF_LEN);
+    if (length)  /* I don't actually care what the event was... just read the file on any event */
+      {
+      do_empty_update(ckp);
+      }
+    }
+#endif
+
+  inotify_rm_watch(inot, watchDesc);
+  close(inot);
+}
+

@@ -105,7 +105,7 @@ function addrmgtuser($data, $user, $err)
 	$pg .= "<tr class=$row>";
 	$pg .= '<td class=dr>&nbsp;</td>';
 	$pg .= '<td class=dr><span class=st1>*</span>2nd Authentication:</td>';
-	$pg .= '<td class=dl><input type=password name=2fa size=10>';
+	$pg .= '<td class=dl><input name=2fa size=10>';
 	$pg .= ' <input type=submit name=OK value=Save></td>';
 	$pg .= '<td colspan=3 class=dl>&nbsp;</td></tr>';
 
@@ -162,7 +162,7 @@ function doaddrmgt($data, $user)
 				$nam = '';
 			$ratio = getparam('ratio:'.$i, false);
 			if (!nuem($addr) && !nuem($ratio))
-				$addrarr[] = array('addr' => $addr, 'payname' => $nam, 'ratio' => $ratio);
+				$addrarr[] = array('addr' => trim($addr), 'payname' => trim($nam), 'ratio' => $ratio);
 		}
 		$ans = userSettings($user, null, $addrarr, $pass, $twofa);
 		if ($ans['STATUS'] != 'ok')
