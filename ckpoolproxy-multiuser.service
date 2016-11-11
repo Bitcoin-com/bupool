@@ -1,0 +1,15 @@
+[Unit]
+Description=ckpool mining pool software
+
+[Service]
+User=ckpool
+Group=ckpool
+PIDFile=/tmp/ckpool.pid
+TimeoutStartSec=0
+ExecStart=/usr/local/bin/ckpool -c /etc/ckpool/ckpool.conf -k -P
+ExecReload=/usr/local/bin/ckpool -c /etc/ckpool/ckpool.conf -H -P
+
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
