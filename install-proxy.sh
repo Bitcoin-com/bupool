@@ -26,4 +26,3 @@ rm /etc/ckpool/ckpool.conf.tmp
 cp ckpoolproxy.service /etc/systemd/system/ckpool.service
 systemctl enable /etc/systemd/system/ckpool.service
 systemctl start ckpool
-
