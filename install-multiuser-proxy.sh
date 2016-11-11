@@ -2,8 +2,6 @@
 
 echo "Ip to bind pool daemon to (server's IP)"
 read bindip
-echo "Username to connect to Bitcoin.com Pool"
-read username
 echo "Enter pool IP to connect to, including port, usually :3333"
 read poolip
 
@@ -16,7 +14,7 @@ chown ckpool:ckpool /var/log/ckpool/ -R
 
 sed "s/{poolip}/${poolip}/g" proxy.conf > /etc/ckpool/ckpool.conf
 cp /etc/ckpool/ckpool.conf /etc/ckpool/ckpool.conf.tmp
-sed "s/{username}/${username}/g" /etc/ckpool/ckpool.conf.tmp > /etc/ckpool/ckpool.conf
+sed "s/{username}/asdf/g" /etc/ckpool/ckpool.conf.tmp > /etc/ckpool/ckpool.conf
 cp /etc/ckpool/ckpool.conf /etc/ckpool/ckpool.conf.tmp
 sed "s/{localip}/${bindip}/g" /etc/ckpool/ckpool.conf.tmp > /etc/ckpool/ckpool.conf
 rm /etc/ckpool/ckpool.conf.tmp
