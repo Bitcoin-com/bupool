@@ -9,10 +9,13 @@ CKPOOL by Con Kolivas and Andrew Smith.
 
 ### Prerequisites
 
-On Ubuntu and Debian, install the build essentials and git
+Building ckpool standalone without ckdb has no dependencies outside of the
+basic build tools on any linux installation.
+
+On Ubuntu and Debian, install the build essentials and git. If you are running Debian, please install sudo as well.
 
 ```
-sudo apt-get install build-essential yasm git sudo
+apt-get install build-essential libpq-dev autoconf automake libtool git sudo
 ```
 
 ### Build Ckpool without ckdb
@@ -20,6 +23,7 @@ sudo apt-get install build-essential yasm git sudo
 ```
 git clone https://github.com/Bitcoin-com/bupool
 cd bupool
+./autogen.sh
 ./configure --without-ckdb
 make
 sudo make install
@@ -33,7 +37,7 @@ sudo ./install-proxy.sh
 
 Enter the local static IP you want to bind the proxy daemon to, then the pool domain or IP address, don't forget to add the stratum port. For this install script, it won't matter which user you specify in the miner, all users will be overwritten by the proxy. If you want to run multiple users, then use the multi user install script.
 
-### Start restart the proxy
+### Start/restart the proxy
 
 The proxy should start automatically when booting. It should also restart automatically in case it crashes. All logs can be found in /var/log/ckpool/ .
 
