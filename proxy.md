@@ -63,3 +63,7 @@ Verify it's running properly
 ```
 tail -f /var/log/ckpool/ckproxy.log
 ```
+or
+```
+tail -f /var/log/ckpool/ckpassthrough.log
+```

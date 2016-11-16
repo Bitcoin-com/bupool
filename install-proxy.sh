@@ -21,6 +21,17 @@ cp /etc/ckpool/ckpool.conf /etc/ckpool/ckpool.conf.tmp
 sed "s/{localip}/${bindip}/g" /etc/ckpool/ckpool.conf.tmp > /etc/ckpool/ckpool.conf
 rm /etc/ckpool/ckpool.conf.tmp
 
+# Make Linux network better
+echo 'net.core.wmem_max=12582912' >> /etc/sysctl.conf
+echo 'net.core.rmem_max=12582912' >> /etc/sysctl.conf
+echo 'net.ipv4.tcp_rmem= 10240 87380 12582912' >> /etc/sysctl.conf
+echo 'net.ipv4.tcp_wmem= 10240 87380 12582912' >> /etc/sysctl.conf
+echo 'net.ipv4.tcp_window_scaling = 1' >> /etc/sysctl.conf
+echo 'net.ipv4.tcp_timestamps = 1' >> /etc/sysctl.conf
+echo 'net.ipv4.tcp_sack = 1' >> /etc/sysctl.conf
+echo 'net.core.netdev_max_backlog = 20000' >> /etc/sysctl.conf
+sysctl -p
+
 # Install CKproxy
 
 cp ckpoolproxy.service /etc/systemd/system/ckpool.service
