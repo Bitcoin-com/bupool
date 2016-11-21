@@ -9,6 +9,7 @@ TimeoutStartSec=0
 ExecStart=/usr/local/bin/ckpool -c /etc/ckpool/ckpool.conf -k -P
 ExecReload=/usr/local/bin/ckpool -c /etc/ckpool/ckpool.conf -H -P
 
+LimitNOFILE=50000
 Restart=always
 
 [Install]
