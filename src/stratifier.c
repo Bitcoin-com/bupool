@@ -7940,6 +7940,7 @@ out:
 // ---- stratum mining ----
 
 #define EMPTY_BLOCK_FILE "/tmp/emptyblock.json"
+#define DEFAULT_EMPTY_BLOCK_VERSION 0x20000000UL
 
 uint64_t curBlockHeight=0;
 bool miningEmptyBlock = false; 
@@ -8013,16 +8014,26 @@ retry:
   swap_256(swap, bin);
   __bin2hex(wb->prevhash, swap, 32);
 
-  json_strcpy(wb->nbit, val, "bits");
-  json_strcpy(wb->ntime, val, "mintime");
-  sscanf(wb->ntime, "%x", &wb->ntime32);
+  wb->ntime32 = time(NULL);
+  snprintf(wb->ntime, 9, "%08x", wb->ntime32);
   wb->flags = strdup("");  // TODO; coinbase string
 
   //json_strcpy(wb->target, val, "target");
   //json_dblcpy(&wb->diff, val, "diff");
-  //json_strcpy(wb->bbversion, val, "bbversion");
+  wb->version = DEFAULT_EMPTY_BLOCK_VERSION;
+  snprintf(wb->bbversion, 9, "%08x", wb->version);
 
-  //json_strdup(&wb->flags, val, "flags");
+  json_strcpy(wb->nbit, val, "bits");
+  assert(strlen(wb->nbit) == 8); // todo, if not, zero pad
+
+  // generate the wb->headerbin for the new block
+  char header[228];
+  snprintf(header, 225, "%s%s%s%s%s%s%s", wb->bbversion, wb->prevhash, "0000000000000000000000000000000000000000000000000000000000000000", wb->ntime, wb->nbit,
+	   "00000000", /* nonce */
+	   workpadding);
+  //LOGDEBUG("Header: %s", header);
+  hex2bin(wb->headerbin, header, 112);
+        
   wb_merkle_bins(ckp,sdata,wb,NULL);
     
   json_decref(val);

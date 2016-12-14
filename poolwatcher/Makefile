@@ -1,6 +1,7 @@
 GCC:=g++
 # -lzmq
-LIBS=-lcrypto -lssl -lboost_thread -lboost_filesystem -lcurl -lboost_system -lboost_regex -lconfig++ /usr/local/lib/libglog.a -lm  -levent -levent_pthreads -lpthread
+LIB_GLOG:=$(shell pkg-config --static --libs libglog)
+LIBS=-lcrypto -lssl -lboost_thread -lboost_filesystem -lcurl -lboost_system -lboost_regex -lconfig++ $(LIB_GLOG) -lm  -levent -levent_pthreads -lpthread
 CFLAGS=-std=c++11 -ggdb -O0 -Wall
 
 PLATFORM=$(shell uname -s)
